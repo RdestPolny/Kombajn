@@ -37,6 +37,23 @@ with st.sidebar.form("add-site"):
         else:
             st.sidebar.error("All fields required")
 
+# List registered sites -------------------------------------------------
+st.sidebar.header("Registered Sites")
+if manager.clients:
+    for client in manager.clients:
+        with st.sidebar.expander(client.site.url):
+            try:
+                posts = client._get("posts", per_page=5)
+                titles = [
+                    p.get("title", {}).get("rendered", p.get("title"))
+                    for p in posts
+                ]
+                st.write(titles)
+            except Exception as exc:  # pragma: no cover - network errors
+                st.write(f"Error fetching posts: {exc}")
+else:
+    st.sidebar.info("No sites configured")
+
 
 # ---------------------------------------------------------------------------
 st.title("PBN Manager")
