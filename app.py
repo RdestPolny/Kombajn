@@ -93,46 +93,37 @@ class WordPressAPI:
         return {cat['name']: cat['id'] for cat in categories_data} if categories_data else {}
 
     def get_users(self):
-        users_data = self._make_request("users", params={"per_page": 100, "roles": "administrator,editor,author"})
+        # Ta funkcja jest teraz używana tylko jako opcja, jeśli jest dostępna.
+        # Główna logika opiera się na autorach z postów.
+        users_data = self._make_request("users", params={"per_page": 100, "roles": "administrator,editor,author"}, display_error=False)
         return {user['name']: user['id'] for user in users_data} if users_data else {}
 
-    # === POPRAWIONA FUNKCJA GET_POSTS Z OBSŁUGĄ PUSTEJ LISTY ===
     def get_posts(self, per_page=50):
         posts_data = self._make_request("posts", params={"per_page": per_page, "orderby": "date", "_embed": True})
-        
-        # KLUCZOWA POPRAWKA: Jeśli nie ma postów, od razu zwróć pustą listę
         if not posts_data:
             return []
 
-        # Sprawdź, czy serwer zwrócił dane '_embedded'
         is_embedded = '_embedded' in posts_data[0]
 
         if is_embedded:
-            # FAST PATH: Dane są osadzone, przetwarzamy je bezpośrednio
             final_posts = []
             for item in posts_data:
                 author_name = item['_embedded']['author'][0].get('name', 'N/A')
-                categories = [
-                    term.get('name', '')
-                    for term_list in item['_embedded'].get('wp:term', [])
-                    for term in term_list if term.get('taxonomy') == 'category'
-                ]
+                author_id = item['_embedded']['author'][0].get('id', 0)
+                categories = [term.get('name', '') for term_list in item['_embedded'].get('wp:term', []) for term in term_list if term.get('taxonomy') == 'category']
                 final_posts.append({
                     "id": item['id'], "title": item['title']['rendered'],
                     "date": datetime.fromisoformat(item['date']).strftime('%Y-%m-%d %H:%M'),
-                    "author": author_name, "categories": ", ".join(filter(None, categories))
+                    "author_name": author_name, "author_id": author_id, "categories": ", ".join(filter(None, categories))
                 })
             return final_posts
         else:
-            # SLOW/FALLBACK PATH: Brak danych '_embedded', dociągamy je osobno
             st.warning("Serwer nie zwrócił osadzonych danych. Dociąganie informacji dodatkowymi zapytaniami...")
-            
             category_ids = {cat_id for post in posts_data for cat_id in post['categories']}
             category_map = {}
             if category_ids:
                 categories_data = self._make_request("categories", params={"include": ",".join(map(str, category_ids))})
-                if categories_data:
-                    category_map = {cat['id']: cat['name'] for cat in categories_data}
+                if categories_data: category_map = {cat['id']: cat['name'] for cat in categories_data}
             
             author_ids = {post['author'] for post in posts_data}
             author_map = {}
@@ -140,17 +131,17 @@ class WordPressAPI:
                 st.info(f"Pobieranie danych dla {len(author_ids)} autorów...")
                 for author_id in author_ids:
                     user_data = self._make_request(f"users/{author_id}", display_error=False)
-                    if user_data:
-                        author_map[author_id] = user_data.get('name', 'N/A')
+                    if user_data: author_map[author_id] = user_data.get('name', 'N/A')
             
             final_posts = []
             for post in posts_data:
-                author_name = author_map.get(post['author'], 'N/A')
+                author_id = post['author']
+                author_name = author_map.get(author_id, 'N/A')
                 category_names = [category_map.get(cat_id, '') for cat_id in post['categories']]
                 final_posts.append({
                     "id": post['id'], "title": post['title']['rendered'],
                     "date": datetime.fromisoformat(post['date']).strftime('%Y-%m-%d %H:%M'),
-                    "author": author_name, "categories": ", ".join(filter(None, category_names))
+                    "author_name": author_name, "author_id": author_id, "categories": ", ".join(filter(None, category_names))
                 })
             return final_posts
 
@@ -185,7 +176,6 @@ conn = get_db_connection()
 menu = ["Dashboard", "Zarządzanie Stronami", "Harmonogram Publikacji", "Zarządzanie Treścią"]
 choice = st.sidebar.selectbox("Menu", menu)
 
-# Reszta kodu UI pozostaje bez zmian
 if choice == "Dashboard":
     st.header("Dashboard")
     sites = db_execute(conn, "SELECT id FROM sites", fetch="all")
@@ -225,7 +215,7 @@ elif choice == "Zarządzanie Stronami":
     **Jak to działa na Streamlit Cloud?**
     1.  **Ładuj:** Na początku sesji załaduj swój plik `pbn_config.json`.
     2.  **Pracuj:** Dodawaj, usuwaj i edytuj strony normalnie.
-    3.  **Zapisuj:** Przed zamknięciem karty **zawsze** zapisuj zmiany, pobierając nowy plik konfiguracyjny.
+    3.  **Zapisuj:** Przed zamknięciem karty **zawsze** zapisuj zmiany, pobierając nowy plik konfiguracyjany.
     """)
     st.subheader("1. Załaduj lub Zapisz Konfigurację")
     col1, col2 = st.columns(2)
@@ -348,30 +338,46 @@ elif choice == "Zarządzanie Treścią":
                 api_instance = WordPressAPI(_url, _username, _password)
                 posts = api_instance.get_posts()
                 categories = api_instance.get_categories()
-                users = api_instance.get_users()
-                return posts, categories, users
+                # Próbujemy pobrać pełną listę userów, ale nie jest to już krytyczne
+                all_users = api_instance.get_users()
+                return posts, categories, all_users
 
-            posts, categories, users = get_site_data(url, username, password)
+            posts, categories, all_users = get_site_data(url, username, password)
+            
+            # === KLUCZOWA POPRAWKA LOGIKI ===
+            # Tworzymy mapę autorów na podstawie pobranych postów
+            users_from_posts = {}
+            if posts:
+                users_from_posts = {post['author_name']: post['author_id'] for post in posts if post.get('author_name') != 'N/A'}
+
+            # Łączymy obie listy userów, aby mieć jak najpełniejszy obraz
+            final_users_map = all_users.copy()
+            final_users_map.update(users_from_posts)
+
             if not posts: st.info("Nie znaleziono wpisów na tej stronie lub wystąpił błąd połączenia.")
             else:
                 df = pd.DataFrame(posts)
+                # Zmiana nazwy kolumny dla lepszego wyświetlania
+                df.rename(columns={'author_name': 'author'}, inplace=True)
+                
                 df['Zaznacz'] = False
                 st.info("Zaznacz wpisy, które chcesz edytować, a następnie użyj formularza masowej edycji poniżej.")
                 edited_df = st.data_editor(df, column_config={"Zaznacz": st.column_config.CheckboxColumn(required=True)},
-                                           disabled=["id", "title", "date", "author", "categories"], hide_index=True, use_container_width=True)
+                                           disabled=["id", "title", "date", "author", "categories", "author_id"], hide_index=True, use_container_width=True)
                 selected_posts = edited_df[edited_df.Zaznacz]
                 if not selected_posts.empty:
                     st.subheader(f"Masowa edycja dla {len(selected_posts)} zaznaczonych wpisów")
                     with st.form("bulk_edit_form"):
                         new_category_names = st.multiselect("Zastąp kategorie", options=categories.keys())
-                        new_author_name = st.selectbox("Zmień autora", options=[None] + list(users.keys()))
+                        new_author_name = st.selectbox("Zmień autora", options=[None] + sorted(list(final_users_map.keys())))
+                        
                         submitted = st.form_submit_button("Wykonaj masową edycję")
                         if submitted:
                             if not new_category_names and not new_author_name: st.error("Wybierz przynajmniej jedną akcję do wykonania.")
                             else:
                                 update_data = {}
                                 if new_category_names: update_data['categories'] = [categories[name] for name in new_category_names]
-                                if new_author_name: update_data['author'] = users[new_author_name]
+                                if new_author_name: update_data['author'] = final_users_map[new_author_name]
                                 with st.spinner("Aktualizowanie wpisów..."):
                                     progress_bar = st.progress(0)
                                     total_selected = len(selected_posts)
