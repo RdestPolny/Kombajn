@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pbn_manager.wordpress_client import WordPressClient, WordPressSite, WordPressError
+from kombajn import WordPressClient, WordPressSite, WordPressError
 
 
 class DummyResponse:
@@ -24,7 +24,7 @@ def test_get_stats():
         {"id": 1, "name": "A", "count": 1},
         {"id": 2, "name": "B", "count": 3},
     ]
-    with patch("requests.get", side_effect=[DummyResponse(posts), DummyResponse(categories)]):
+    with patch("kombajn.http_get", side_effect=[DummyResponse(posts), DummyResponse(categories)]):
         client = WordPressClient(WordPressSite("http://example.com", "u", "p"))
         stats = client.get_stats()
     assert stats["posts"] == 2
@@ -32,7 +32,7 @@ def test_get_stats():
 
 
 def test_schedule_post():
-    with patch("requests.post", return_value=DummyResponse({"id": 99})) as mock_post:
+    with patch("kombajn.http_post", return_value=DummyResponse({"id": 99})) as mock_post:
         client = WordPressClient(WordPressSite("http://example.com", "u", "p"))
         publish_at = dt.datetime(2025, 1, 1, 10, 0, 0)
         result = client.schedule_post("Title", "Body", [1], publish_at)
@@ -50,7 +50,7 @@ def test_schedule_post_auth_error():
         def raise_for_status(self):
             raise RuntimeError("HTTP 401")
 
-    with patch("requests.post", return_value=UnauthorizedResponse()):
+    with patch("kombajn.http_post", return_value=UnauthorizedResponse()):
         client = WordPressClient(WordPressSite("http://example.com", "u", "p"))
         publish_at = dt.datetime(2025, 1, 1, 10, 0, 0)
         with pytest.raises(WordPressError) as exc:

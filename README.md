@@ -1,9 +1,9 @@
 # PBN Manager Prototype
 
 This repository contains a lightweight prototype for managing multiple
-WordPress blogs from a single place.  It provides a small Streamlit
-application together with a Python package for interacting with the
-WordPress REST API.
+WordPress blogs from a single file.  The script bundles a small Streamlit
+application together with a minimal WordPress client and a manager for
+aggregating statistics.
 
 ## Features
 
@@ -18,7 +18,7 @@ complete private blog network management system.
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py  # starts a development server
+streamlit run kombajn.py  # starts a development server
 ```
 
 Unit tests can be executed with:
