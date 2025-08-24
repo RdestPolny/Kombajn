@@ -11,9 +11,6 @@ import base64
 
 # --- KONFIGURACJA I INICJALIZACJA ---
 
-# Klucz szyfrujący jest teraz stały, aby pliki konfiguracyjne były przenośne.
-# W idealnym świecie ten klucz powinien być w st.secrets, ale dla prostoty użyjemy stałej.
-# ZMIEŃ TĘ WARTOŚĆ NA WŁASNĄ, LOSOWĄ I ZAPAMIĘTAJ JĄ!
 SECRET_KEY_SEED = "twoj-bardzo-dlugi-i-tajny-klucz-do-szyfrowania-konfiguracji"
 KEY = base64.urlsafe_b64encode(SECRET_KEY_SEED.encode().ljust(32)[:32])
 FERNET = Fernet(KEY)
@@ -24,48 +21,49 @@ def encrypt_data(data: str) -> bytes:
 def decrypt_data(encrypted_data: bytes) -> str:
     return FERNET.decrypt(encrypted_data).decode()
 
-# --- ZARZĄDZANIE BAZĄ DANYCH W PAMIĘCI (DLA STREAMLIT CLOUD) ---
+# --- ZARZĄDZANIE BAZĄ DANYCH W PAMIĘCI ---
 
 def get_db_connection():
-    """Tworzy połączenie z bazą danych w pamięci i przechowuje je w stanie sesji."""
     if 'db_conn' not in st.session_state:
-        # :memory: tworzy bazę danych, która istnieje tylko na czas trwania sesji
         st.session_state.db_conn = sqlite3.connect(":memory:", check_same_thread=False)
         init_db(st.session_state.db_conn)
     return st.session_state.db_conn
 
 def init_db(conn):
-    """Inicjalizuje schemat bazy danych."""
     cursor = conn.cursor()
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS sites (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        url TEXT NOT NULL UNIQUE,
-        username TEXT NOT NULL,
-        app_password BLOB NOT NULL
-    )
-    """)
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, url TEXT NOT NULL UNIQUE,
+        username TEXT NOT NULL, app_password BLOB NOT NULL
+    )""")
     conn.commit()
 
 def db_execute(conn, query, params=(), fetch=None):
-    """Uniwersalna funkcja do interakcji z bazą danych w pamięci."""
     cursor = conn.cursor()
     cursor.execute(query, params)
-    if fetch == "one":
-        result = cursor.fetchone()
-    elif fetch == "all":
-        result = cursor.fetchall()
-    else:
-        result = None
+    if fetch == "one": result = cursor.fetchone()
+    elif fetch == "all": result = cursor.fetchall()
+    else: result = None
     conn.commit()
     return result
 
-# --- KLASA DO OBSŁUGI WORDPRESS REST API (bez zmian) ---
+# --- KLASA DO OBSŁUGI WORDPRESS REST API ---
 class WordPressAPI:
     def __init__(self, url, username, password):
         self.base_url = url.rstrip('/') + "/wp-json/wp/v2"
         self.auth = HTTPBasicAuth(username, password)
+
+    def _make_request(self, endpoint, params=None):
+        """Pomocnicza funkcja do wykonywania zapytań GET."""
+        try:
+            response = requests.get(f"{self.base_url}/{endpoint}", params=params, auth=self.auth, timeout=15)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            st.error(f"Błąd HTTP ({e.response.status_code}) przy zapytaniu do '{endpoint}': {e.response.text}")
+        except requests.exceptions.RequestException as e:
+            st.error(f"Błąd połączenia przy zapytaniu do '{endpoint}': {e}")
+        return None
 
     def test_connection(self):
         try:
@@ -90,44 +88,64 @@ class WordPressAPI:
             return {"total_posts": "Błąd", "last_post_date": "Błąd"}
 
     def get_categories(self):
-        try:
-            response = requests.get(f"{self.base_url}/categories", params={"per_page": 100}, auth=self.auth, timeout=10)
-            response.raise_for_status()
-            return {cat['name']: cat['id'] for cat in response.json()}
-        except Exception:
-            return {}
+        categories_data = self._make_request("categories", params={"per_page": 100})
+        return {cat['name']: cat['id'] for cat in categories_data} if categories_data else {}
 
     def get_users(self):
-        try:
-            response = requests.get(f"{self.base_url}/users", params={"per_page": 100, "roles": "administrator,editor,author"}, auth=self.auth, timeout=10)
-            response.raise_for_status()
-            return {user['name']: user['id'] for user in response.json()}
-        except Exception:
-            return {}
+        users_data = self._make_request("users", params={"per_page": 100, "roles": "administrator,editor,author"})
+        return {user['name']: user['id'] for user in users_data} if users_data else {}
 
-    def get_posts(self, per_page=25):
-        try:
-            response = requests.get(f"{self.base_url}/posts", params={"per_page": per_page, "orderby": "date", "_embed": True}, auth=self.auth, timeout=15)
-            response.raise_for_status()
-            posts = []
-            for item in response.json():
-                author_name = "N/A"
-                if '_embedded' in item and 'author' in item['_embedded'] and item['_embedded']['author']:
-                    author_name = item['_embedded']['author'][0].get('name', 'N/A')
-                categories = []
-                if '_embedded' in item and 'wp:term' in item['_embedded'] and item['_embedded']['wp:term']:
-                    for term_list in item['_embedded']['wp:term']:
-                        for term in term_list:
-                            if term.get('taxonomy') == 'category':
-                                categories.append(term.get('name', ''))
-                posts.append({
-                    "id": item['id'], "title": item['title']['rendered'], "date": datetime.fromisoformat(item['date']).strftime('%Y-%m-%d %H:%M'),
+    # === NOWA, NIEZAWODNA FUNKCJA GET_POSTS ===
+    def get_posts(self, per_page=50):
+        posts_data = self._make_request("posts", params={"per_page": per_page, "orderby": "date", "_embed": True})
+        if not posts_data:
+            return []
+
+        # Sprawdź, czy serwer zwrócił dane '_embedded' (szybka ścieżka)
+        if posts_data and '_embedded' in posts_data[0]:
+            # FAST PATH: Dane są osadzone, przetwarzamy je bezpośrednio
+            final_posts = []
+            for item in posts_data:
+                author_name = item['_embedded']['author'][0].get('name', 'N/A')
+                categories = [
+                    term.get('name', '')
+                    for term_list in item['_embedded'].get('wp:term', [])
+                    for term in term_list if term.get('taxonomy') == 'category'
+                ]
+                final_posts.append({
+                    "id": item['id'], "title": item['title']['rendered'],
+                    "date": datetime.fromisoformat(item['date']).strftime('%Y-%m-%d %H:%M'),
                     "author": author_name, "categories": ", ".join(filter(None, categories))
                 })
-            return posts
-        except Exception as e:
-            st.error(f"Błąd podczas pobierania wpisów: {type(e).__name__} - {e}")
-            return []
+            return final_posts
+        else:
+            # SLOW/FALLBACK PATH: Brak danych '_embedded', musimy dociągnąć je osobno
+            st.warning("Serwer nie zwrócił osadzonych danych (autor, kategorie). Dociąganie informacji dodatkowymi zapytaniami... Może to potrwać dłużej.")
+            author_ids = {post['author'] for post in posts_data}
+            category_ids = {cat_id for post in posts_data for cat_id in post['categories']}
+
+            author_map = {}
+            if author_ids:
+                users_data = self._make_request("users", params={"include": ",".join(map(str, author_ids))})
+                if users_data:
+                    author_map = {user['id']: user['name'] for user in users_data}
+
+            category_map = {}
+            if category_ids:
+                categories_data = self._make_request("categories", params={"include": ",".join(map(str, category_ids))})
+                if categories_data:
+                    category_map = {cat['id']: cat['name'] for cat in categories_data}
+            
+            final_posts = []
+            for post in posts_data:
+                author_name = author_map.get(post['author'], 'N/A')
+                category_names = [category_map.get(cat_id, '') for cat_id in post['categories']]
+                final_posts.append({
+                    "id": post['id'], "title": post['title']['rendered'],
+                    "date": datetime.fromisoformat(post['date']).strftime('%Y-%m-%d %H:%M'),
+                    "author": author_name, "categories": ", ".join(filter(None, category_names))
+                })
+            return final_posts
 
     def update_post(self, post_id, data):
         try:
@@ -156,27 +174,24 @@ st.set_page_config(layout="wide", page_title="PBN Manager")
 st.title("🚀 PBN Manager")
 st.caption("Centralne zarządzanie Twoją siecią blogów WordPress.")
 
-# Pobierz połączenie z bazą danych w pamięci
 conn = get_db_connection()
-
 menu = ["Dashboard", "Zarządzanie Stronami", "Harmonogram Publikacji", "Zarządzanie Treścią"]
 choice = st.sidebar.selectbox("Menu", menu)
 
 if choice == "Dashboard":
     st.header("Dashboard")
-    sites = db_execute(conn, "SELECT id, name, url, username, app_password FROM sites", fetch="all")
+    sites = db_execute(conn, "SELECT id FROM sites", fetch="all")
     if not sites:
         st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami', aby załadować plik konfiguracyjny lub dodać pierwszą stronę.")
     else:
-        # ... reszta kodu Dashboard bez zmian ...
         if st.button("Odśwież wszystkie statystyki"):
             st.cache_data.clear()
 
         @st.cache_data(ttl=600)
         def get_all_stats():
             all_data = []
-            progress_bar = st.progress(0, text="Pobieranie danych...")
             sites_for_stats = db_execute(get_db_connection(), "SELECT id, name, url, username, app_password FROM sites", fetch="all")
+            progress_bar = st.progress(0, text="Pobieranie danych...")
             for i, (site_id, name, url, username, encrypted_pass) in enumerate(sites_for_stats):
                 password = decrypt_data(encrypted_pass)
                 api = WordPressAPI(url, username, password)
@@ -196,31 +211,23 @@ if choice == "Dashboard":
         col2.metric("Łączna liczba wpisów", f"{int(total_posts_sum):,}".replace(",", " "))
         st.dataframe(df, use_container_width=True)
 
-
 elif choice == "Zarządzanie Stronami":
     st.header("Zarządzanie Stronami")
-
     st.info("""
     **Jak to działa na Streamlit Cloud?**
     1.  **Ładuj:** Na początku sesji załaduj swój plik `pbn_config.json`.
     2.  **Pracuj:** Dodawaj, usuwaj i edytuj strony normalnie.
     3.  **Zapisuj:** Przed zamknięciem karty **zawsze** zapisuj zmiany, pobierając nowy plik konfiguracyjny.
     """)
-
-    # --- SEKCJA IMPORTU / EKSPORTU ---
     st.subheader("1. Załaduj lub Zapisz Konfigurację")
-    
     col1, col2 = st.columns(2)
-    
     with col1:
         uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny (`pbn_config.json`)", type="json")
         if uploaded_file is not None:
             try:
                 config_data = json.load(uploaded_file)
-                # Wyczyść starą bazę i załaduj nową
                 db_execute(conn, "DELETE FROM sites")
                 for site in config_data['sites']:
-                    # Hasło jest zapisane w base64, dekodujemy je z powrotem do bytes
                     encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
                     db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)",
                                (site['name'], site['url'], site['username'], encrypted_password_bytes))
@@ -228,28 +235,16 @@ elif choice == "Zarządzanie Stronami":
                 st.rerun()
             except Exception as e:
                 st.error(f"Błąd podczas przetwarzania pliku: {e}")
-
     with col2:
         sites_for_export = db_execute(conn, "SELECT name, url, username, app_password FROM sites", fetch="all")
         if sites_for_export:
             export_data = {'sites': []}
             for name, url, username, encrypted_pass_bytes in sites_for_export:
-                # Szyfrowane hasło (bytes) konwertujemy na string base64, aby było kompatybilne z JSON
                 encrypted_pass_b64 = base64.b64encode(encrypted_pass_bytes).decode('utf-8')
-                export_data['sites'].append({
-                    'name': name, 'url': url, 'username': username, 'app_password_b64': encrypted_pass_b64
-                })
-            
-            st.download_button(
-                label="Pobierz konfigurację do pliku",
-                data=json.dumps(export_data, indent=2),
-                file_name="pbn_config.json",
-                mime="application/json"
-            )
-
+                export_data['sites'].append({'name': name, 'url': url, 'username': username, 'app_password_b64': encrypted_pass_b64})
+            st.download_button(label="Pobierz konfigurację do pliku", data=json.dumps(export_data, indent=2),
+                               file_name="pbn_config.json", mime="application/json")
     st.divider()
-
-    # --- SEKCJA DODAWANIA I LISTOWANIA STRON ---
     st.subheader("2. Dodaj nową stronę")
     with st.form("add_site_form", clear_on_submit=True):
         name = st.text_input("Przyjazna nazwa strony")
@@ -258,8 +253,7 @@ elif choice == "Zarządzanie Stronami":
         app_password = st.text_input("Hasło Aplikacji", type="password")
         submitted = st.form_submit_button("Testuj połączenie i Zapisz")
         if submitted:
-            if not all([name, url, username, app_password]):
-                st.error("Wszystkie pola są wymagane!")
+            if not all([name, url, username, app_password]): st.error("Wszystkie pola są wymagane!")
             else:
                 with st.spinner("Testowanie połączenia..."):
                     api = WordPressAPI(url, username, app_password)
@@ -271,13 +265,10 @@ elif choice == "Zarządzanie Stronami":
                         st.success(f"Strona '{name}' dodana! Pamiętaj, aby zapisać konfigurację do pliku.")
                     except sqlite3.IntegrityError:
                         st.error(f"Strona o URL '{url}' już istnieje w bazie.")
-                else:
-                    st.error(f"Nie udało się dodać strony. Błąd: {message}")
-
+                else: st.error(f"Nie udało się dodać strony. Błąd: {message}")
     st.subheader("3. Lista załadowanych stron")
     sites = db_execute(conn, "SELECT id, name, url, username FROM sites", fetch="all")
-    if not sites:
-        st.info("Brak załadowanych stron. Użyj formularza powyżej, aby dodać pierwszą stronę lub załaduj plik konfiguracyjny.")
+    if not sites: st.info("Brak załadowanych stron.")
     else:
         for site_id, name, url, username in sites:
             cols = st.columns([0.4, 0.4, 0.2])
@@ -288,14 +279,11 @@ elif choice == "Zarządzanie Stronami":
                 st.success(f"Strona '{name}' usunięta! Pamiętaj, aby zapisać nową konfigurację do pliku.")
                 st.rerun()
 
-# ... (reszta kodu dla "Harmonogram Publikacji" i "Zarządzanie Treścią" wymaga drobnych poprawek, by używać `conn`) ...
-
 elif choice == "Harmonogram Publikacji":
     st.header("Harmonogram Publikacji")
     sites = db_execute(conn, "SELECT id, name FROM sites", fetch="all")
     site_options = {name: site_id for site_id, name in sites}
-    if not site_options:
-        st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
+    if not site_options: st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
     else:
         with st.form("schedule_post_form"):
             st.subheader("Nowy wpis")
@@ -310,8 +298,7 @@ elif choice == "Harmonogram Publikacji":
             publish_time = cols_date[1].time_input("Godzina publikacji")
             submit_button = st.form_submit_button("Zaplanuj wpis")
             if submit_button:
-                if not all([selected_sites_names, title, content]):
-                    st.error("Musisz wybrać przynajmniej jedną stronę oraz podać tytuł i treść.")
+                if not all([selected_sites_names, title, content]): st.error("Musisz wybrać przynajmniej jedną stronę oraz podać tytuł i treść.")
                 else:
                     publish_datetime = datetime.combine(publish_date, publish_time).isoformat()
                     with st.spinner("Przetwarzanie..."):
@@ -335,13 +322,11 @@ elif choice == "Harmonogram Publikacji":
                             if success: st.success(f"[{site_name}]: {message}")
                             else: st.error(f"[{site_name}]: {message}")
 
-
 elif choice == "Zarządzanie Treścią":
     st.header("Zarządzanie Treścią i Masowa Edycja")
     sites = db_execute(conn, "SELECT id, name, url, username, app_password FROM sites", fetch="all")
     site_options = {site[1]: site for site in sites}
-    if not site_options:
-        st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
+    if not site_options: st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
     else:
         selected_site_name = st.selectbox("Wybierz stronę do edycji", options=site_options.keys())
         if selected_site_name:
@@ -353,14 +338,13 @@ elif choice == "Zarządzanie Treścią":
             @st.cache_data(ttl=300)
             def get_site_data(_url, _username, _password):
                 api_instance = WordPressAPI(_url, _username, _password)
-                posts = api_instance.get_posts(per_page=50)
+                posts = api_instance.get_posts()
                 categories = api_instance.get_categories()
                 users = api_instance.get_users()
                 return posts, categories, users
 
             posts, categories, users = get_site_data(url, username, password)
-            if not posts:
-                st.info("Nie znaleziono wpisów na tej stronie lub wystąpił błąd połączenia.")
+            if not posts: st.info("Nie znaleziono wpisów na tej stronie lub wystąpił błąd połączenia.")
             else:
                 df = pd.DataFrame(posts)
                 df['Zaznacz'] = False
@@ -375,14 +359,11 @@ elif choice == "Zarządzanie Treścią":
                         new_author_name = st.selectbox("Zmień autora", options=[None] + list(users.keys()))
                         submitted = st.form_submit_button("Wykonaj masową edycję")
                         if submitted:
-                            if not new_category_names and not new_author_name:
-                                st.error("Wybierz przynajmniej jedną akcję do wykonania.")
+                            if not new_category_names and not new_author_name: st.error("Wybierz przynajmniej jedną akcję do wykonania.")
                             else:
                                 update_data = {}
-                                if new_category_names:
-                                    update_data['categories'] = [categories[name] for name in new_category_names]
-                                if new_author_name:
-                                    update_data['author'] = users[new_author_name]
+                                if new_category_names: update_data['categories'] = [categories[name] for name in new_category_names]
+                                if new_author_name: update_data['author'] = users[new_author_name]
                                 with st.spinner("Aktualizowanie wpisów..."):
                                     progress_bar = st.progress(0)
                                     total_selected = len(selected_posts)
