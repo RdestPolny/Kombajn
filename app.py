@@ -64,11 +64,8 @@ if manager.clients:
             category_ids = [int(x.strip()) for x in categories.split(",") if x.strip()]
             for client in manager.clients:
                 if client.site.url == site_url:
-                    try:
-                        client.schedule_post(title, content, category_ids, publish_dt)
-                        st.success("Post scheduled")
-                    except Exception as e:  # pragma: no cover - network failure
-                        st.error(f"Failed to schedule post: {e}")
+
+                 
 else:
     st.info("Register a site to schedule posts")
 
