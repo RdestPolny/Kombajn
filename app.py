@@ -110,25 +110,40 @@ class WordPressAPI:
         except Exception:
             return {}
 
+    # === POPRAWIONA FUNKCJA GET_POSTS ===
     def get_posts(self, per_page=25):
         try:
-            response = requests.get(f"{self.base_url}/posts", params={"per_page": per_page, "orderby": "date", "_embed": "author,wp:term"}, auth=self.auth, timeout=15)
+            # Używamy _embed, aby WordPress dołączył dane autora i kategorii do jednego zapytania
+            response = requests.get(f"{self.base_url}/posts", params={"per_page": per_page, "orderby": "date", "_embed": True}, auth=self.auth, timeout=15)
             response.raise_for_status()
             posts = []
             for item in response.json():
-                author_name = item['_embedded']['author'][0]['name'] if 'author' in item['_embedded'] else 'N/A'
-                categories = [term['name'] for term in item['_embedded']['wp:term'][0]] if 'wp:term' in item['_embedded'] else []
+                # Bezpieczne pobieranie nazwy autora
+                author_name = "N/A"
+                if '_embedded' in item and 'author' in item['_embedded'] and item['_embedded']['author']:
+                    author_name = item['_embedded']['author'][0].get('name', 'N/A')
+
+                # Bezpieczne pobieranie nazw kategorii
+                categories = []
+                if '_embedded' in item and 'wp:term' in item['_embedded'] and item['_embedded']['wp:term']:
+                    for term_list in item['_embedded']['wp:term']:
+                        for term in term_list:
+                            if term.get('taxonomy') == 'category':
+                                categories.append(term.get('name', ''))
+                
                 posts.append({
                     "id": item['id'],
                     "title": item['title']['rendered'],
                     "date": datetime.fromisoformat(item['date']).strftime('%Y-%m-%d %H:%M'),
                     "author": author_name,
-                    "categories": ", ".join(categories)
+                    "categories": ", ".join(filter(None, categories)) # Filtruje puste nazwy
                 })
             return posts
         except Exception as e:
-            st.error(f"Błąd podczas pobierania wpisów: {e}")
+            # Zwraca bardziej szczegółowy błąd
+            st.error(f"Błąd podczas pobierania wpisów: {type(e).__name__} - {e}")
             return []
+    # === KONIEC POPRAWIONEJ FUNKCJI ===
 
     def update_post(self, post_id, data):
         try:
@@ -162,7 +177,6 @@ init_db()
 menu = ["Dashboard", "Zarządzanie Stronami", "Harmonogram Publikacji", "Zarządzanie Treścią"]
 choice = st.sidebar.selectbox("Menu", menu)
 
-# ... (kod dla "Dashboard", "Zarządzanie Stronami", "Harmonogram Publikacji" pozostaje bez zmian) ...
 if choice == "Dashboard":
     st.header("Dashboard")
     sites = db_execute("SELECT id, name, url, username, app_password FROM sites", fetch="all")
@@ -278,7 +292,6 @@ elif choice == "Harmonogram Publikacji":
                             if success: st.success(f"[{site_name}]: {message}")
                             else: st.error(f"[{site_name}]: {message}")
 
-# --- NOWY WIDOK: ZARZĄDZANIE TREŚCIĄ ---
 elif choice == "Zarządzanie Treścią":
     st.header("Zarządzanie Treścią i Masowa Edycja")
 
@@ -297,7 +310,6 @@ elif choice == "Zarządzanie Treścią":
 
             st.subheader(f"Wpisy na stronie: {name}")
             
-            # Pobieranie danych (z cache)
             @st.cache_data(ttl=300)
             def get_site_data(_url, _username, _password):
                 api_instance = WordPressAPI(_url, _username, _password)
@@ -316,7 +328,6 @@ elif choice == "Zarządzanie Treścią":
                 
                 st.info("Zaznacz wpisy, które chcesz edytować, a następnie użyj formularza masowej edycji poniżej.")
                 
-                # Tabela z checkboxami
                 edited_df = st.data_editor(
                     df,
                     column_config={"Zaznacz": st.column_config.CheckboxColumn(required=True)},
@@ -331,7 +342,6 @@ elif choice == "Zarządzanie Treścią":
                     st.subheader(f"Masowa edycja dla {len(selected_posts)} zaznaczonych wpisów")
                     
                     with st.form("bulk_edit_form"):
-                        # Opcje edycji
                         new_category_names = st.multiselect("Zastąp kategorie", options=categories.keys())
                         new_author_name = st.selectbox("Zmień autora", options=[None] + list(users.keys()))
                         
@@ -359,6 +369,6 @@ elif choice == "Zarządzanie Treścią":
                                         progress_bar.progress((i + 1) / total_selected)
                                 
                                 st.info("Proces zakończony. Odśwież dane, aby zobaczyć zmiany.")
-                                st.cache_data.clear() # Czyści cache, aby wymusić ponowne załadowanie danych
+                                st.cache_data.clear()
                 else:
                     st.caption("Zaznacz przynajmniej jeden wpis, aby aktywować panel masowej edycji.")
