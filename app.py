@@ -1,59 +1,71 @@
-"""Example web application exposing a tiny management panel.
+"""Streamlit application providing a minimal PBN management panel.
 
-The application provides two endpoints:
-- ``/stats`` returns a JSON summary of all registered sites.
-- ``/schedule`` schedules a new post on a chosen site.
-
-It is deliberately small and intended as a starting point for a more
-feature complete panel.
+The interface allows registering multiple WordPress sites, viewing
+aggregated statistics and scheduling future posts.  It is a simple
+starting point for a more feature rich dashboard.
 """
 from __future__ import annotations
 
 import datetime as dt
-from flask import Flask, jsonify, request
+
+import streamlit as st
 
 from pbn_manager import PBNManager
 
-app = Flask(__name__)
-manager = PBNManager()
+
+# ---------------------------------------------------------------------------
+# Initialise manager in the session state so added sites persist across
+# Streamlit script reruns.
+if "manager" not in st.session_state:
+    st.session_state.manager = PBNManager()
+
+manager: PBNManager = st.session_state.manager
 
 
-@app.route("/stats")
-def stats() -> "flask.Response":
-    """Return aggregated statistics for all sites."""
-    return jsonify(manager.aggregate_stats())
+# ---------------------------------------------------------------------------
+# Sidebar form for registering new WordPress sites.
+st.sidebar.header("Add WordPress Site")
+with st.sidebar.form("add-site"):
+    url = st.text_input("Site URL", placeholder="https://example.com")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    submitted = st.form_submit_button("Add")
+    if submitted:
+        if url and username and password:
+            manager.add_site(url, username, password)
+            st.sidebar.success(f"Added {url}")
+        else:
+            st.sidebar.error("All fields required")
 
 
-@app.post("/schedule")
-def schedule_post():
-    """Schedule a post on a specified site.
+# ---------------------------------------------------------------------------
+st.title("PBN Manager")
 
-    Expected JSON payload::
-
-        {
-            "site": "https://example.com",
-            "title": "My post",
-            "content": "<p>Body</p>",
-            "categories": [1, 2],
-            "publish_at": "2025-01-01T10:00:00"
-        }
-    """
-    payload = request.get_json(force=True)
-    site_url = payload["site"]
-    for client in manager.clients:
-        if client.site.url == site_url:
-            publish_at = dt.datetime.fromisoformat(payload["publish_at"])
-            result = client.schedule_post(
-                payload["title"],
-                payload["content"],
-                payload.get("categories", []),
-                publish_at,
-            )
-            return jsonify(result), 201
-    return jsonify({"error": "site not registered"}), 404
+st.header("Aggregated statistics")
+if manager.clients:
+    stats = manager.aggregate_stats()
+    st.json(stats)
+else:
+    st.info("No sites registered yet")
 
 
-if __name__ == "__main__":
-    # Example: run a development server. In real usage the manager should
-    # register sites before starting the server.
-    app.run(debug=True)
+st.header("Schedule a post")
+if manager.clients:
+    with st.form("schedule-post"):
+        site_url = st.selectbox("Site", [c.site.url for c in manager.clients])
+        title = st.text_input("Title")
+        content = st.text_area("Content")
+        categories = st.text_input("Category IDs (comma separated)")
+        publish_date = st.date_input("Publish date", dt.date.today())
+        publish_time = st.time_input("Publish time", dt.time(10, 0))
+        submit = st.form_submit_button("Schedule")
+        if submit:
+            publish_dt = dt.datetime.combine(publish_date, publish_time)
+            category_ids = [int(x.strip()) for x in categories.split(",") if x.strip()]
+            for client in manager.clients:
+                if client.site.url == site_url:
+                    client.schedule_post(title, content, category_ids, publish_dt)
+                    st.success("Post scheduled")
+else:
+    st.info("Register a site to schedule posts")
+
