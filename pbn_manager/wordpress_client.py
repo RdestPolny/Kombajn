@@ -16,6 +16,7 @@ import requests
 @dataclass
 class WordPressSite:
     """Configuration of a WordPress site."""
+    id: int
     url: str
     username: str
     password: str

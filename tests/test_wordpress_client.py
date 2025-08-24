@@ -22,7 +22,7 @@ def test_get_stats():
         {"id": 2, "name": "B", "count": 3},
     ]
     with patch("requests.get", side_effect=[DummyResponse(posts), DummyResponse(categories)]):
-        client = WordPressClient(WordPressSite("http://example.com", "u", "p"))
+        client = WordPressClient(WordPressSite(1, "http://example.com", "u", "p"))
         stats = client.get_stats()
     assert stats["posts"] == 2
     assert stats["categories"] == {"A": 1, "B": 3}
@@ -30,7 +30,7 @@ def test_get_stats():
 
 def test_schedule_post():
     with patch("requests.post", return_value=DummyResponse({"id": 99})) as mock_post:
-        client = WordPressClient(WordPressSite("http://example.com", "u", "p"))
+        client = WordPressClient(WordPressSite(1, "http://example.com", "u", "p"))
         publish_at = dt.datetime(2025, 1, 1, 10, 0, 0)
         result = client.schedule_post("Title", "Body", [1], publish_at)
     assert result == {"id": 99}
