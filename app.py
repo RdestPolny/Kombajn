@@ -8,7 +8,7 @@ import json
 import os
 from cryptography.fernet import Fernet
 import base64
-import openai
+import google.generativeai as genai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 import io
@@ -129,12 +129,9 @@ class WordPressAPI:
             image_bytes = io.BytesIO(response.content)
             filename = os.path.basename(urlparse(image_url).path)
             if not filename: filename = "uploaded_image.jpg"
-
             headers = {'Content-Disposition': f'attachment; filename={filename}'}
-            
             upload_response = requests.post(f"{self.base_url}/media", headers=headers, files={'file': image_bytes}, auth=self.auth)
             upload_response.raise_for_status()
-            
             return upload_response.json().get('id')
         except Exception as e:
             st.warning(f"Nie udało się wgrać obrazka z URL: {image_url}. Błąd: {e}")
@@ -150,27 +147,16 @@ class WordPressAPI:
 
     def publish_post(self, title, content, status, publish_date, category_ids, tags, featured_image_url=None, meta_title=None, meta_description=None):
         post_data = {'title': title, 'content': content, 'status': status, 'date': publish_date, 'categories': category_ids, 'tags': tags}
-        
-        # Krok 1: Wgraj obrazek, jeśli podano URL
         if featured_image_url:
             media_id = self.upload_image(featured_image_url)
             if media_id:
                 post_data['featured_media'] = media_id
-        
-        # Krok 2: Przygotuj meta tagi dla popularnych wtyczek SEO
         if meta_title or meta_description:
             post_data['meta'] = {
-                # Rank Math & AIOSEO
-                "rank_math_title": meta_title,
-                "rank_math_description": meta_description,
-                "_aioseo_title": meta_title,
-                "_aioseo_description": meta_description,
-                # Yoast SEO
-                "_yoast_wpseo_title": meta_title,
-                "_yoast_wpseo_metadesc": meta_description
+                "rank_math_title": meta_title, "rank_math_description": meta_description,
+                "_aioseo_title": meta_title, "_aioseo_description": meta_description,
+                "_yoast_wpseo_title": meta_title, "_yoast_wpseo_metadesc": meta_description
             }
-
-        # Krok 3: Opublikuj wpis
         try:
             response = requests.post(f"{self.base_url}/posts", json=post_data, auth=self.auth, timeout=20)
             response.raise_for_status()
@@ -178,20 +164,19 @@ class WordPressAPI:
         except requests.exceptions.HTTPError as e: return False, f"Błąd publikacji ({e.response.status_code}): {e.response.text}"
         except requests.exceptions.RequestException as e: return False, f"Błąd sieci podczas publikacji: {e}"
 
-# --- FUNKCJA DO GENEROWANIA TREŚCI ---
-def generate_single_article(api_key, title, prompt):
+# --- NOWA FUNKCJA DO GENEROWANIA TREŚCI Z GEMINI ---
+def generate_single_article_gemini(api_key, title, prompt):
     try:
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim. Artykuł powinien być dobrze sformatowany w HTML, z użyciem nagłówków H2, H3, paragrafów, list i pogrubień."},
-                {"role": "user", "content": f"Tytuł artykułu: {title}\n\nSzczegółowe wytyczne (prompt): {prompt}"}
-            ]
-        )
-        return title, response.choices[0].message.content
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        system_prompt = "Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim. Artykuł powinien być dobrze sformatowany w HTML, z użyciem nagłówków H2, H3, paragrafów, list i pogrubień."
+        full_prompt = f"{system_prompt}\n\n---ZADANIE---\nTytuł artykułu: {title}\n\nSzczegółowe wytyczne (prompt): {prompt}"
+        
+        response = model.generate_content(full_prompt)
+        return title, response.text
     except Exception as e:
-        return title, f"**BŁĄD GENEROWANIA:** {str(e)}"
+        return title, f"**BŁĄD GENEROWANIA (GEMINI):** {str(e)}"
 
 # --- INTERFEJS UŻYTKOWNIKA (STREAMLIT) ---
 
@@ -202,16 +187,23 @@ st.caption("Centralne zarządzanie i generowanie treści dla Twojej sieci blogó
 conn = get_db_connection()
 
 st.sidebar.header("Konfiguracja API")
-openai_api_key = st.secrets.get("OPENAI_API_KEY")
-if not openai_api_key:
-    openai_api_key = st.sidebar.text_input("Klucz OpenAI API", type="password", help="Wklej swój klucz API od OpenAI. Nie jest on nigdzie zapisywany.")
+google_api_key = st.secrets.get("GOOGLE_API_KEY")
+if not google_api_key:
+    google_api_key = st.sidebar.text_input("Klucz Google AI API", type="password", help="Wklej swój klucz API od Google AI. Nie jest on nigdzie zapisywany.")
 
-menu = ["Dashboard", "Generowanie Treści", "Zarządzanie Promptami", "Harmonogram Publikacji", "Zarządzanie Treścią", "Zarządzanie Stronami"]
-choice = st.sidebar.selectbox("Menu", menu)
+# Użycie session_state do zarządzania nawigacją
+if 'menu_choice' not in st.session_state:
+    st.session_state.menu_choice = "Dashboard"
+
+def set_menu_choice(choice):
+    st.session_state.menu_choice = choice
+
+menu_options = ["Dashboard", "Generowanie Treści", "Zarządzanie Promptami", "Harmonogram Publikacji", "Zarządzanie Treścią", "Zarządzanie Stronami"]
+st.sidebar.selectbox("Menu", menu_options, key='menu_choice_selector', on_change=lambda: set_menu_choice(st.session_state.menu_choice_selector))
 
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 
-if choice == "Dashboard":
+if st.session_state.menu_choice == "Dashboard":
     st.header("Dashboard")
     sites = db_execute(conn, "SELECT id FROM sites", fetch="all")
     if not sites:
@@ -239,10 +231,10 @@ if choice == "Dashboard":
         col2.metric("Łączna liczba wpisów", f"{int(total_posts_sum):,}".replace(",", " "))
         st.dataframe(df, use_container_width=True)
 
-elif choice == "Generowanie Treści":
-    st.header("🤖 Generator Treści z GPT-4o-mini")
-    if not openai_api_key:
-        st.error("Wprowadź swój klucz OpenAI API w panelu bocznym, aby korzystać z tej funkcji.")
+elif st.session_state.menu_choice == "Generowanie Treści":
+    st.header("🤖 Generator Treści z Gemini 1.5 Flash")
+    if not google_api_key:
+        st.error("Wprowadź swój klucz Google AI API w panelu bocznym, aby korzystać z tej funkcji.")
     else:
         if 'tasks' not in st.session_state: st.session_state.tasks = [{"title": "", "prompt": ""}]
         prompts_list = db_execute(conn, "SELECT id, name, content FROM prompts", fetch="all")
@@ -271,7 +263,7 @@ elif choice == "Generowanie Treści":
                         progress_bar = st.progress(0, text="Oczekiwanie na wyniki...")
                         completed_count = 0
                         with ThreadPoolExecutor(max_workers=10) as executor:
-                            futures = {executor.submit(generate_single_article, openai_api_key, task['title'], task['prompt']): task for task in valid_tasks}
+                            futures = {executor.submit(generate_single_article_gemini, google_api_key, task['title'], task['prompt']): task for task in valid_tasks}
                             for future in as_completed(futures):
                                 title, content = future.result()
                                 st.session_state.generated_articles.append({"title": title, "content": content})
@@ -281,12 +273,16 @@ elif choice == "Generowanie Treści":
     
     if st.session_state.generated_articles:
         st.subheader("Wygenerowane Artykuły")
-        st.info("Przejdź do 'Harmonogram Publikacji', aby zaplanować te artykuły.")
         for i, article in enumerate(st.session_state.generated_articles):
             with st.expander(f"**{i+1}. {article['title']}**"):
                 st.markdown(article['content'], unsafe_allow_html=True)
+                if st.button("Zaplanuj publikację", key=f"plan_{i}"):
+                    st.session_state.prefill_title = article['title']
+                    st.session_state.prefill_content = article['content']
+                    set_menu_choice("Harmonogram Publikacji")
+                    st.rerun()
 
-elif choice == "Zarządzanie Promptami":
+elif st.session_state.menu_choice == "Zarządzanie Promptami":
     st.header("📚 Zarządzanie Promptami")
     st.info("Tutaj możesz dodawać, edytować i usuwać szablony promptów, których będziesz używać w generatorze treści.")
     with st.expander("Dodaj nowy prompt", expanded=True):
@@ -316,19 +312,8 @@ elif choice == "Zarządzanie Promptami":
                     st.success(f"Prompt '{name}' usunięty! Pamiętaj, aby zapisać konfigurację.")
                     st.rerun()
 
-elif choice == "Harmonogram Publikacji":
+elif st.session_state.menu_choice == "Harmonogram Publikacji":
     st.header("Harmonogram Publikacji")
-    if st.session_state.generated_articles:
-        with st.expander("Zaplanuj wygenerowane artykuły", expanded=True):
-            st.info("Wybierz artykuł z listy, a jego treść automatycznie wypełni formularz poniżej.")
-            for i, article in enumerate(st.session_state.generated_articles):
-                col_title, col_button = st.columns([4, 1])
-                col_title.write(f"**{i+1}. {article['title']}**")
-                if col_button.button("Użyj tego artykułu", key=f"use_article_{i}"):
-                    st.session_state.prefill_title = article['title']
-                    st.session_state.prefill_content = article['content']
-                    st.success(f"Formularz wypełniony treścią: '{article['title']}'")
-    
     sites = db_execute(conn, "SELECT id, name FROM sites", fetch="all")
     site_options = {name: site_id for site_id, name in sites}
     if not site_options: st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
@@ -340,14 +325,11 @@ elif choice == "Harmonogram Publikacji":
             selected_sites_names = st.multiselect("Wybierz strony docelowe", options=site_options.keys())
             title = st.text_input("Tytuł wpisu", value=title_value)
             content = st.text_area("Treść wpisu (obsługuje HTML)", value=content_value, height=400)
-            
             st.subheader("Ustawienia dodatkowe (opcjonalne)")
-            # NOWE POLA
-            featured_image_url = st.text_input("URL obrazka wyróżniającego", help="Wklej bezpośredni link do obrazka (np. z Pexels, Unsplash). Zostanie on automatycznie wgrany na stronę.")
+            featured_image_url = st.text_input("URL obrazka wyróżniającego", help="Wklej bezpośredni link do obrazka. Zostanie on automatycznie wgrany na stronę.")
             col_meta1, col_meta2 = st.columns(2)
             meta_title = col_meta1.text_input("Meta Tytuł", help="Kompatybilne z Yoast, Rank Math, AIOSEO.")
             meta_description = col_meta2.text_area("Meta Opis", height=100, help="Kompatybilne z Yoast, Rank Math, AIOSEO.")
-
             st.subheader("Kategorie, Tagi i Data")
             cols_meta = st.columns(2)
             categories_str = cols_meta[0].text_input("Kategorie (oddzielone przecinkami)")
@@ -355,7 +337,6 @@ elif choice == "Harmonogram Publikacji":
             cols_date = st.columns(2)
             publish_date = cols_date[0].date_input("Data publikacji", min_value=datetime.now())
             publish_time = cols_date[1].time_input("Godzina publikacji")
-            
             submit_button = st.form_submit_button("Zaplanuj wpis")
             if submit_button:
                 if 'prefill_title' in st.session_state: del st.session_state.prefill_title
@@ -378,16 +359,11 @@ elif choice == "Harmonogram Publikacji":
                                     if cat_name in available_categories: target_category_ids.append(available_categories[cat_name])
                                     else: st.warning(f"Na stronie '{site_name}' nie znaleziono kategorii '{cat_name}'.")
                             target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
-                            
-                            # Przekazanie nowych danych do funkcji
-                            success, message = api.publish_post(
-                                title, content, "future", publish_datetime, target_category_ids, target_tags,
-                                featured_image_url=featured_image_url, meta_title=meta_title, meta_description=meta_description
-                            )
+                            success, message = api.publish_post(title, content, "future", publish_datetime, target_category_ids, target_tags, featured_image_url=featured_image_url, meta_title=meta_title, meta_description=meta_description)
                             if success: st.success(f"[{site_name}]: {message}")
                             else: st.error(f"[{site_name}]: {message}")
 
-elif choice == "Zarządzanie Treścią":
+elif st.session_state.menu_choice == "Zarządzanie Treścią":
     st.header("Zarządzanie Treścią i Masowa Edycja")
     sites = db_execute(conn, "SELECT id, name, url, username, app_password FROM sites", fetch="all")
     site_options = {site[1]: site for site in sites}
@@ -442,7 +418,7 @@ elif choice == "Zarządzanie Treścią":
                 else:
                     st.caption("Zaznacz przynajmniej jeden wpis, aby aktywować panel masowej edycji.")
 
-elif choice == "Zarządzanie Stronami":
+elif st.session_state.menu_choice == "Zarządzanie Stronami":
     st.header("Zarządzanie Stronami")
     st.info("""
     **Jak to działa na Streamlit Cloud?**
