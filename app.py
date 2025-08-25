@@ -10,6 +10,8 @@ from cryptography.fernet import Fernet
 import base64
 import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
+import io
 
 # --- KONFIGURACJA I INICJALIZACJA ---
 
@@ -33,13 +35,11 @@ def get_db_connection():
 
 def init_db(conn):
     cursor = conn.cursor()
-    # Tabela na strony
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS sites (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, url TEXT NOT NULL UNIQUE,
         username TEXT NOT NULL, app_password BLOB NOT NULL
     )""")
-    # NOWA TABELA NA PROMPTY
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS prompts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +57,7 @@ def db_execute(conn, query, params=(), fetch=None):
     conn.commit()
     return result
 
-# --- KLASA DO OBSŁUGI WORDPRESS REST API (bez zmian) ---
+# --- KLASA DO OBSŁUGI WORDPRESS REST API ---
 class WordPressAPI:
     def __init__(self, url, username, password):
         self.base_url = url.rstrip('/') + "/wp-json/wp/v2"
@@ -122,6 +122,24 @@ class WordPressAPI:
                 final_posts.append({"id": p['id'], "title": p['title']['rendered'], "date": datetime.fromisoformat(p['date']).strftime('%Y-%m-%d %H:%M'), "author_name": author_map.get(p['author'], 'N/A'), "author_id": p['author'], "categories": ", ".join(filter(None, [category_map.get(cid, '') for cid in p['categories']]))})
             return final_posts
 
+    def upload_image(self, image_url):
+        try:
+            response = requests.get(image_url, timeout=20)
+            response.raise_for_status()
+            image_bytes = io.BytesIO(response.content)
+            filename = os.path.basename(urlparse(image_url).path)
+            if not filename: filename = "uploaded_image.jpg"
+
+            headers = {'Content-Disposition': f'attachment; filename={filename}'}
+            
+            upload_response = requests.post(f"{self.base_url}/media", headers=headers, files={'file': image_bytes}, auth=self.auth)
+            upload_response.raise_for_status()
+            
+            return upload_response.json().get('id')
+        except Exception as e:
+            st.warning(f"Nie udało się wgrać obrazka z URL: {image_url}. Błąd: {e}")
+            return None
+
     def update_post(self, post_id, data):
         try:
             response = requests.post(f"{self.base_url}/posts/{post_id}", json=data, auth=self.auth, timeout=15)
@@ -130,10 +148,31 @@ class WordPressAPI:
         except requests.exceptions.HTTPError as e: return False, f"Błąd aktualizacji wpisu ID {post_id} ({e.response.status_code}): {e.response.text}"
         except requests.exceptions.RequestException as e: return False, f"Błąd sieci przy aktualizacji wpisu ID {post_id}: {e}"
 
-    def publish_post(self, title, content, status, publish_date, category_ids, tags):
+    def publish_post(self, title, content, status, publish_date, category_ids, tags, featured_image_url=None, meta_title=None, meta_description=None):
         post_data = {'title': title, 'content': content, 'status': status, 'date': publish_date, 'categories': category_ids, 'tags': tags}
+        
+        # Krok 1: Wgraj obrazek, jeśli podano URL
+        if featured_image_url:
+            media_id = self.upload_image(featured_image_url)
+            if media_id:
+                post_data['featured_media'] = media_id
+        
+        # Krok 2: Przygotuj meta tagi dla popularnych wtyczek SEO
+        if meta_title or meta_description:
+            post_data['meta'] = {
+                # Rank Math & AIOSEO
+                "rank_math_title": meta_title,
+                "rank_math_description": meta_description,
+                "_aioseo_title": meta_title,
+                "_aioseo_description": meta_description,
+                # Yoast SEO
+                "_yoast_wpseo_title": meta_title,
+                "_yoast_wpseo_metadesc": meta_description
+            }
+
+        # Krok 3: Opublikuj wpis
         try:
-            response = requests.post(f"{self.base_url}/posts", json=post_data, auth=self.auth, timeout=15)
+            response = requests.post(f"{self.base_url}/posts", json=post_data, auth=self.auth, timeout=20)
             response.raise_for_status()
             return True, f"Wpis opublikowany/zaplanowany! ID: {response.json()['id']}"
         except requests.exceptions.HTTPError as e: return False, f"Błąd publikacji ({e.response.status_code}): {e.response.text}"
@@ -206,11 +245,8 @@ elif choice == "Generowanie Treści":
         st.error("Wprowadź swój klucz OpenAI API w panelu bocznym, aby korzystać z tej funkcji.")
     else:
         if 'tasks' not in st.session_state: st.session_state.tasks = [{"title": "", "prompt": ""}]
-        
-        # Pobierz listę promptów do selectboxa
         prompts_list = db_execute(conn, "SELECT id, name, content FROM prompts", fetch="all")
         prompt_map = {name: content for id, name, content in prompts_list}
-
         st.subheader("Zdefiniuj artykuły do wygenerowania")
         col1, col2, _ = st.columns([1, 1, 5])
         if col1.button("➕ Dodaj kolejny artykuł"): st.session_state.tasks.append({"title": "", "prompt": ""})
@@ -221,11 +257,7 @@ elif choice == "Generowanie Treści":
             for i, task in enumerate(st.session_state.tasks):
                 st.markdown(f"--- \n ### Artykuł #{i+1}")
                 st.session_state.tasks[i]['title'] = st.text_input("Tytuł artykułu", value=task['title'], key=f"title_{i}")
-                
-                # Selectbox do wyboru promptu
                 selected_prompt = st.selectbox("Wybierz gotowy prompt (opcjonalnie)", ["-- Brak --"] + list(prompt_map.keys()), key=f"select_prompt_{i}")
-                
-                # Jeśli wybrano prompt, użyj jego treści
                 prompt_content = prompt_map.get(selected_prompt, task['prompt'])
                 st.session_state.tasks[i]['prompt'] = st.text_area("Prompt (szczegółowe wytyczne)", value=prompt_content, key=f"prompt_{i}", height=150)
 
@@ -257,7 +289,6 @@ elif choice == "Generowanie Treści":
 elif choice == "Zarządzanie Promptami":
     st.header("📚 Zarządzanie Promptami")
     st.info("Tutaj możesz dodawać, edytować i usuwać szablony promptów, których będziesz używać w generatorze treści.")
-
     with st.expander("Dodaj nowy prompt", expanded=True):
         with st.form("add_prompt_form", clear_on_submit=True):
             prompt_name = st.text_input("Nazwa promptu (np. 'Recenzja produktu', 'Artykuł poradnikowy')")
@@ -272,7 +303,6 @@ elif choice == "Zarządzanie Promptami":
                         st.error(f"Prompt o nazwie '{prompt_name}' już istnieje. Wybierz inną nazwę.")
                 else:
                     st.error("Nazwa i treść promptu nie mogą być puste.")
-
     st.subheader("Lista zapisanych promptów")
     prompts = db_execute(conn, "SELECT id, name, content FROM prompts", fetch="all")
     if not prompts:
@@ -310,12 +340,22 @@ elif choice == "Harmonogram Publikacji":
             selected_sites_names = st.multiselect("Wybierz strony docelowe", options=site_options.keys())
             title = st.text_input("Tytuł wpisu", value=title_value)
             content = st.text_area("Treść wpisu (obsługuje HTML)", value=content_value, height=400)
+            
+            st.subheader("Ustawienia dodatkowe (opcjonalne)")
+            # NOWE POLA
+            featured_image_url = st.text_input("URL obrazka wyróżniającego", help="Wklej bezpośredni link do obrazka (np. z Pexels, Unsplash). Zostanie on automatycznie wgrany na stronę.")
+            col_meta1, col_meta2 = st.columns(2)
+            meta_title = col_meta1.text_input("Meta Tytuł", help="Kompatybilne z Yoast, Rank Math, AIOSEO.")
+            meta_description = col_meta2.text_area("Meta Opis", height=100, help="Kompatybilne z Yoast, Rank Math, AIOSEO.")
+
+            st.subheader("Kategorie, Tagi i Data")
             cols_meta = st.columns(2)
             categories_str = cols_meta[0].text_input("Kategorie (oddzielone przecinkami)")
             tags_str = cols_meta[1].text_input("Tagi (oddzielone przecinkami)")
             cols_date = st.columns(2)
             publish_date = cols_date[0].date_input("Data publikacji", min_value=datetime.now())
             publish_time = cols_date[1].time_input("Godzina publikacji")
+            
             submit_button = st.form_submit_button("Zaplanuj wpis")
             if submit_button:
                 if 'prefill_title' in st.session_state: del st.session_state.prefill_title
@@ -338,7 +378,12 @@ elif choice == "Harmonogram Publikacji":
                                     if cat_name in available_categories: target_category_ids.append(available_categories[cat_name])
                                     else: st.warning(f"Na stronie '{site_name}' nie znaleziono kategorii '{cat_name}'.")
                             target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
-                            success, message = api.publish_post(title, content, "future", publish_datetime, target_category_ids, target_tags)
+                            
+                            # Przekazanie nowych danych do funkcji
+                            success, message = api.publish_post(
+                                title, content, "future", publish_datetime, target_category_ids, target_tags,
+                                featured_image_url=featured_image_url, meta_title=meta_title, meta_description=meta_description
+                            )
                             if success: st.success(f"[{site_name}]: {message}")
                             else: st.error(f"[{site_name}]: {message}")
 
@@ -412,12 +457,10 @@ elif choice == "Zarządzanie Stronami":
         if uploaded_file is not None:
             try:
                 config_data = json.load(uploaded_file)
-                # Ładowanie stron
                 db_execute(conn, "DELETE FROM sites")
                 for site in config_data.get('sites', []):
                     encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
                     db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
-                # Ładowanie promptów
                 db_execute(conn, "DELETE FROM prompts")
                 for prompt in config_data.get('prompts', []):
                     db_execute(conn, "INSERT INTO prompts (name, content) VALUES (?, ?)", (prompt['name'], prompt['content']))
