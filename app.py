@@ -49,7 +49,7 @@ def db_execute(conn, query, params=(), fetch=None):
     conn.commit()
     return result
 
-# --- KLASA DO OBSŁUGI WORDPRESS REST API ---
+# --- KLASA DO OBSŁUGI WORDPRESS REST API (bez zmian) ---
 class WordPressAPI:
     def __init__(self, url, username, password):
         self.base_url = url.rstrip('/') + "/wp-json/wp/v2"
@@ -165,54 +165,73 @@ HTML_RULES = (
 )
 SYSTEM_PROMPT_BASE = f"Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim.\n{HTML_RULES}"
 
-def generate_article_gemini(api_key, title, prompt):
+def generate_article_two_parts(model_function, api_key, title, prompt):
+    part1_text = model_function(api_key, f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nTytuł artykułu: {title}\nSzczegółowe wytyczne (prompt): {prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu.")
+    part2_text = model_function(api_key, f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nOto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie. Nie dodawaj wstępów typu 'Oto kontynuacja'.\nOryginalne wytyczne: {prompt}\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}")
+    return title, part1_text.strip() + "\n\n" + part2_text.strip()
+
+def call_gemini(api_key, prompt):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt_part1 = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nTytuł artykułu: {title}\nSzczegółowe wytyczne (prompt): {prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu."
-    response_part1 = model.generate_content(prompt_part1)
-    part1_text = response_part1.text
-    prompt_part2 = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nOto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie. Nie dodawaj wstępów typu 'Oto kontynuacja'.\nOryginalne wytyczne: {prompt}\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"
-    response_part2 = model.generate_content(prompt_part2)
-    part2_text = response_part2.text
-    return title, part1_text.strip() + "\n\n" + part2_text.strip()
+    return model.generate_content(prompt).text
 
-def generate_article_gpt4o_mini(api_key, title, prompt):
+def call_gpt4o_mini(api_key, prompt):
     client = openai.OpenAI(api_key=api_key)
-    messages_part1 = [{"role": "system", "content": SYSTEM_PROMPT_BASE}, {"role": "user", "content": f"Tytuł artykułu: {title}\nSzczegółowe wytyczne (prompt): {prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu."}]
-    response_part1 = client.chat.completions.create(model="gpt-4o-mini", messages=messages_part1)
-    part1_text = response_part1.choices[0].message.content
-    messages_part2 = [{"role": "system", "content": SYSTEM_PROMPT_BASE}, {"role": "user", "content": f"Oto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie. Nie dodawaj wstępów typu 'Oto kontynuacja'.\nOryginalne wytyczne: {prompt}\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"}]
-    response_part2 = client.chat.completions.create(model="gpt-4o-mini", messages=messages_part2)
-    part2_text = response_part2.choices[0].message.content
-    return title, part1_text.strip() + "\n\n" + part2_text.strip()
+    response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
+    return response.choices[0].message.content
 
-def generate_article_gpt5_nano(api_key, title, prompt):
-    # UWAGA: Ta funkcja jest oparta na hipotetycznym, przyszłym API OpenAI dla GPT-5.
-    # Może wymagać dostosowania, gdy API zostanie oficjalnie wydane.
+def call_gpt5_nano(api_key, prompt):
     client = openai.OpenAI(api_key=api_key)
-    prompt_part1 = [{"role": "developer", "content": SYSTEM_PROMPT_BASE}, {"role": "user", "content": f"Tytuł artykułu: {title}\nSzczegółowe wytyczne (prompt): {prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu."}]
-    response_part1 = client.responses.create(model="gpt-5-nano", input=prompt_part1)
-    part1_text = response_part1.output_text
-    prompt_part2 = [{"role": "developer", "content": SYSTEM_PROMPT_BASE}, {"role": "user", "content": f"Oto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie. Nie dodawaj wstępów typu 'Oto kontynuacja'.\nOryginalne wytyczne: {prompt}\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"}]
-    response_part2 = client.responses.create(model="gpt-5-nano", input=prompt_part2)
-    part2_text = response_part2.output_text
-    return title, part1_text.strip() + "\n\n" + part2_text.strip()
+    response = client.responses.create(model="gpt-5-nano", input=[{"role": "user", "content": prompt}])
+    return response.output_text
 
 def generate_article_dispatcher(model, api_key, title, prompt):
     try:
         if model == "gemini-1.5-flash":
-            return generate_article_gemini(api_key, title, prompt)
+            return generate_article_two_parts(lambda k, p: call_gemini(k, p), api_key, title, prompt)
         elif model == "gpt-4o-mini":
-            return generate_article_gpt4o_mini(api_key, title, prompt)
+            return generate_article_two_parts(lambda k, p: call_gpt4o_mini(k, p), api_key, title, prompt)
         elif model == "gpt-5-nano":
-            return generate_article_gpt5_nano(api_key, title, prompt)
+            return generate_article_two_parts(lambda k, p: call_gpt5_nano(k, p), api_key, title, prompt)
         else:
             return title, f"**BŁĄD: Nieznany model '{model}'**"
     except Exception as e:
-        # Specjalna obsługa błędu dla hipotetycznego API GPT-5
         if model == "gpt-5-nano" and "has no attribute 'responses'" in str(e):
-            return title, "**BŁĄD GENEROWANIA (GPT-5):** Wygląda na to, że Twoja biblioteka `openai` nie obsługuje jeszcze nowego API `responses`. Ta funkcja jest eksperymentalna."
-        return title, f"**BŁĄD KRYTYCZNY GENEROWANIA:** {str(e)}"
+            return title, "**BŁĄD (GPT-5):** Biblioteka `openai` nie obsługuje jeszcze API `responses`."
+        return title, f"**BŁĄD KRYTYCZNY:** {str(e)}"
+
+def generate_single_brief_gpt5(api_key, topic):
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        prompt = f"""Jesteś strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na temat: "{topic}".
+Brief musi być w formacie JSON i zawierać następujące klucze:
+- "temat_artykulu": Dokładny, angażujący tytuł artykułu.
+- "grupa_docelowa": Krótki opis, dla kogo jest ten artykuł.
+- "zagadnienia_kluczowe": Lista (array) 3-5 głównych sekcji (nagłówków H2), które powinny znaleźć się w artykule.
+- "slowa_kluczowe": Lista (array) 5-10 powiązanych słów kluczowych i fraz LSI do naturalnego wplecenia w treść.
+
+Przykład odpowiedzi dla tematu "Jak dbać o róże w ogrodzie":
+{{
+  "temat_artykulu": "Jak dbać o róże w ogrodzie? Kompletny poradnik krok po kroku",
+  "grupa_docelowa": "Początkujący i średnio-zaawansowani miłośnicy ogrodnictwa, którzy chcą cieszyć się zdrowymi i pięknie kwitnącymi różami.",
+  "zagadnienia_kluczowe": [
+    "Wybór odpowiedniego stanowiska i sadzenie róż",
+    "Regularne podlewanie i nawożenie – klucz do sukcesu",
+    "Cięcie róż: kiedy i jak to robić prawidłowo?",
+    "Ochrona przed chorobami i szkodnikami",
+    "Zabezpieczanie róż na zimę"
+  ],
+  "slowa_kluczowe": ["pielęgnacja róż", "przycinanie róż", "choroby róż", "sadzonki róż", "nawożenie róż", "czarna plamistość", "mszyce na różach", "okrywanie róż na zimę"]
+}}
+
+Wygeneruj brief JSON dla tematu: "{topic}"
+"""
+        response = client.responses.create(model="gpt-5-nano", input=[{"role": "user", "content": prompt}])
+        # Wyciągnij czysty JSON z odpowiedzi
+        json_string = response.output_text.strip().replace("```json", "").replace("```", "")
+        return topic, json.loads(json_string)
+    except Exception as e:
+        return topic, {"error": f"Błąd generowania briefu: {str(e)}"}
 
 # --- INTERFEJS UŻYTKOWNIKA (STREAMLIT) ---
 
@@ -225,78 +244,130 @@ conn = get_db_connection()
 if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Dashboard"
 def set_menu_choice(choice): st.session_state.menu_choice = choice
 
-menu_options = ["Dashboard", "Generowanie Treści", "Zarządzanie Promptami", "Harmonogram Publikacji", "Zarządzanie Treścią", "Zarządzanie Stronami"]
+menu_options = ["Dashboard", "Generator Briefów", "Generowanie Treści", "Zarządzanie Promptami", "Harmonogram Publikacji", "Zarządzanie Treścią", "Zarządzanie Stronami"]
 st.sidebar.selectbox("Menu", menu_options, key='menu_choice_selector', index=menu_options.index(st.session_state.menu_choice), on_change=lambda: set_menu_choice(st.session_state.menu_choice_selector))
 
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
+if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
 
-# --- Dynamiczne zarządzanie kluczami API w panelu bocznym ---
+# --- Dynamiczne zarządzanie kluczami API ---
 st.sidebar.header("Konfiguracja API")
 MODEL_API_MAP = {
     "gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"),
     "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"),
     "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")
 }
-# Domyślny model, jeśli żaden nie jest wybrany w stanie sesji
-active_model = st.session_state.get('selected_model', "gemini-1.5-flash")
-api_key_name, api_key_label = MODEL_API_MAP[active_model]
+active_model = st.session_state.get('selected_model_for_articles', "gemini-1.5-flash")
+if st.session_state.menu_choice == "Generator Briefów": active_model = "gpt-5-nano"
 
+api_key_name, api_key_label = MODEL_API_MAP[active_model]
 api_key = st.secrets.get(api_key_name)
 if not api_key:
-    api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}. Nie jest on nigdzie zapisywany.")
+    api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}.")
 
 if st.session_state.menu_choice == "Dashboard":
     # ... (kod bez zmian)
     pass
 
+elif st.session_state.menu_choice == "Generator Briefów":
+    st.header("📝 Generator Briefów z GPT-5 Nano")
+    st.info("Krok 1: Wpisz tematy artykułów (każdy w nowej linii). Aplikacja wygeneruje dla nich szczegółowe briefy, gotowe do użycia w następnym kroku.")
+    
+    if MODEL_API_MAP["gpt-5-nano"][0] != api_key_name:
+        st.warning(f"Generator briefów używa gpt-5-nano. Upewnij się, że w panelu bocznym jest aktywny i wpisany klucz OpenAI API.")
+    
+    if not api_key:
+        st.error("Wprowadź klucz OpenAI API w panelu bocznym, aby korzystać z tej funkcji.")
+    else:
+        topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
+        if st.button("Generuj briefy", type="primary"):
+            topics = [topic.strip() for topic in topics_input.split('\n') if topic.strip()]
+            if not topics:
+                st.error("Wpisz przynajmniej jeden temat.")
+            else:
+                st.session_state.generated_briefs = []
+                with st.spinner(f"Generowanie {len(topics)} briefów..."):
+                    progress_bar = st.progress(0, text="Oczekiwanie na wyniki...")
+                    completed_count = 0
+                    with ThreadPoolExecutor(max_workers=10) as executor:
+                        futures = {executor.submit(generate_single_brief_gpt5, api_key, topic): topic for topic in topics}
+                        for future in as_completed(futures):
+                            topic, brief_data = future.result()
+                            st.session_state.generated_briefs.append({"topic": topic, "brief": brief_data})
+                            completed_count += 1
+                            progress_bar.progress(completed_count / len(topics), text=f"Ukończono {completed_count}/{len(topics)}...")
+                st.success("Generowanie briefów zakończone!")
+
+    if st.session_state.generated_briefs:
+        st.subheader("Wygenerowane Briefy")
+        if st.button("Przejdź do generowania artykułów z tych briefów"):
+            set_menu_choice("Generowanie Treści")
+            st.rerun()
+        for i, item in enumerate(st.session_state.generated_briefs):
+            with st.expander(f"**{i+1}. {item['topic']}**"):
+                st.json(item['brief'])
+
 elif st.session_state.menu_choice == "Generowanie Treści":
     st.header("🤖 Generator Treści AI")
-    
-    # Wybór modelu
-    selected_model = st.selectbox(
-        "Wybierz model do generowania treści",
-        options=list(MODEL_API_MAP.keys()),
-        key='selected_model'
-    )
+    st.info("Krok 2: Wybierz briefy, model AI i wygeneruj finalne artykuły.")
 
-    if not api_key:
-        st.error(f"Wprowadź swój {api_key_label} w panelu bocznym, aby korzystać z tego modelu.")
+    if not st.session_state.generated_briefs:
+        st.warning("Brak wygenerowanych briefów. Przejdź najpierw do zakładki 'Generator Briefów'.")
     else:
-        if 'tasks' not in st.session_state: st.session_state.tasks = [{"title": "", "prompt": ""}]
-        prompts_list = db_execute(conn, "SELECT id, name, content FROM prompts", fetch="all")
-        prompt_map = {name: content for id, name, content in prompts_list}
-        st.subheader("Zdefiniuj artykuły do wygenerowania")
-        col1, col2, _ = st.columns([1, 1, 5])
-        if col1.button("➕ Dodaj kolejny artykuł"): st.session_state.tasks.append({"title": "", "prompt": ""})
-        if col2.button("➖ Usuń ostatni artykuł"):
-            if len(st.session_state.tasks) > 1: st.session_state.tasks.pop()
+        selected_model = st.selectbox("Wybierz model do generowania artykułów", options=list(MODEL_API_MAP.keys()), key='selected_model_for_articles')
         
-        with st.form("generation_form"):
-            for i, task in enumerate(st.session_state.tasks):
-                st.markdown(f"--- \n ### Artykuł #{i+1}")
-                st.session_state.tasks[i]['title'] = st.text_input("Tytuł artykułu", value=task['title'], key=f"title_{i}")
-                selected_prompt = st.selectbox("Wybierz gotowy prompt (opcjonalnie)", ["-- Brak --"] + list(prompt_map.keys()), key=f"select_prompt_{i}")
-                prompt_content = prompt_map.get(selected_prompt, task['prompt'])
-                st.session_state.tasks[i]['prompt'] = st.text_area("Prompt (szczegółowe wytyczne)", value=prompt_content, key=f"prompt_{i}", height=150)
+        if MODEL_API_MAP[selected_model][0] != api_key_name:
+            st.warning(f"Wybrany model wymaga klucza {MODEL_API_MAP[selected_model][1]}. Upewnij się, że jest aktywny i wpisany w panelu bocznym.")
 
-            submitted = st.form_submit_button(f"Generuj {len(st.session_state.tasks)} artykułów modelem {selected_model}", type="primary")
-            if submitted:
-                valid_tasks = [t for t in st.session_state.tasks if t['title'] and t['prompt']]
-                if not valid_tasks: st.error("Uzupełnij tytuł i prompt dla przynajmniej jednego artykułu.")
-                else:
-                    st.session_state.generated_articles = []
-                    with st.spinner(f"Generowanie {len(valid_tasks)} artykułów..."):
-                        progress_bar = st.progress(0, text="Oczekiwanie na wyniki...")
-                        completed_count = 0
-                        with ThreadPoolExecutor(max_workers=10) as executor:
-                            futures = {executor.submit(generate_article_dispatcher, selected_model, api_key, task['title'], task['prompt']): task for task in valid_tasks}
-                            for future in as_completed(futures):
-                                title, content = future.result()
-                                st.session_state.generated_articles.append({"title": title, "content": content})
-                                completed_count += 1
-                                progress_bar.progress(completed_count / len(valid_tasks), text=f"Ukończono {completed_count}/{len(valid_tasks)}...")
-                    st.success("Generowanie zakończone!")
-    
+        if not api_key:
+            st.error(f"Wprowadź swój {api_key_label} w panelu bocznym, aby korzystać z tego modelu.")
+        else:
+            df = pd.DataFrame(st.session_state.generated_briefs)
+            df['Zaznacz'] = False
+            df['Temat'] = df['topic']
+            df['Brief'] = df['brief'].apply(lambda x: json.dumps(x, ensure_ascii=False, indent=2))
+            
+            with st.form("article_generation_form"):
+                st.subheader("Wybierz briefy do przetworzenia")
+                edited_df = st.data_editor(df[['Zaznacz', 'Temat', 'Brief']], hide_index=True, use_container_width=True)
+                submitted = st.form_submit_button("Generuj zaznaczone artykuły", type="primary")
+
+                if submitted:
+                    selected_briefs = edited_df[edited_df.Zaznacz]
+                    if selected_briefs.empty:
+                        st.error("Zaznacz przynajmniej jeden brief.")
+                    else:
+                        master_prompt_template = db_execute(conn, "SELECT content FROM prompts WHERE name = ?", ("Master Prompt E-E-A-T",), fetch="one")
+                        if not master_prompt_template:
+                            st.error("Nie znaleziono 'Master Prompt E-E-A-T'. Załaduj go w zakładce 'Zarządzanie Promptami'.")
+                        else:
+                            master_prompt_template = master_prompt_template[0]
+                            tasks_to_run = []
+                            for index, row in selected_briefs.iterrows():
+                                brief_data = json.loads(row['Brief'])
+                                if 'error' in brief_data: continue
+                                
+                                final_prompt = master_prompt_template.replace("[TEMAT ARTYKUŁU]", brief_data.get("temat_artykulu", row["Temat"]))
+                                final_prompt = final_prompt.replace("[OPIS GRUPY DOCELOWEJ]", brief_data.get("grupa_docelowa", ""))
+                                final_prompt = final_prompt.replace("[LISTA SŁÓW KLUCZOWYCH]", ", ".join(brief_data.get("slowa_kluczowe", [])))
+                                zagadnienia_str = "\n".join([f"{i+1}. {z}" for i, z in enumerate(brief_data.get("zagadnienia_kluczowe", []))])
+                                final_prompt = final_prompt.replace("1. [Zagadnienie 1]\n2. [Zagadnienie 2]\n3. [Zagadnienie 3]\n4. [itd.]", zagadnienia_str)
+                                
+                                tasks_to_run.append({'title': brief_data.get("temat_artykulu", row["Temat"]), 'prompt': final_prompt})
+
+                            st.session_state.generated_articles = []
+                            with st.spinner(f"Generowanie {len(tasks_to_run)} artykułów..."):
+                                progress_bar = st.progress(0)
+                                completed_count = 0
+                                with ThreadPoolExecutor(max_workers=10) as executor:
+                                    futures = {executor.submit(generate_article_dispatcher, selected_model, api_key, task['title'], task['prompt']): task for task in tasks_to_run}
+                                    for future in as_completed(futures):
+                                        title, content = future.result()
+                                        st.session_state.generated_articles.append({"title": title, "content": content})
+                                        completed_count += 1
+                                        progress_bar.progress(completed_count / len(tasks_to_run))
+                            st.success("Generowanie artykułów zakończone!")
+
     if st.session_state.generated_articles:
         st.subheader("Wygenerowane Artykuły")
         for i, article in enumerate(st.session_state.generated_articles):
@@ -308,11 +379,11 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                     set_menu_choice("Harmonogram Publikacji")
                     st.rerun()
 
+# Pozostałe zakładki pozostają bez zmian w logice
 elif st.session_state.menu_choice == "Zarządzanie Promptami":
     st.header("📚 Zarządzanie Promptami")
     st.info("Tutaj możesz dodawać, edytować i usuwać szablony promptów, których będziesz używać w generatorze treści.")
     
-    # Przycisk do załadowania master promptu
     if st.button("Załaduj domyślny Master Prompt E-E-A-T"):
         master_prompt_name = "Master Prompt E-E-A-T"
         master_prompt_content = """# ROLA I CEL
@@ -375,7 +446,6 @@ Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie sy
                     st.success(f"Prompt '{name}' usunięty! Pamiętaj, aby zapisać konfigurację.")
                     st.rerun()
 
-# Pozostałe zakładki pozostają bez zmian w logice, ale kod jest wklejony w całości
 elif st.session_state.menu_choice == "Harmonogram Publikacji":
     st.header("Harmonogram Publikacji")
     sites = db_execute(conn, "SELECT id, name FROM sites", fetch="all")
