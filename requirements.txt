@@ -3,3 +3,4 @@ pandas
 requests
 cryptography
 openai
+google-generativeai
