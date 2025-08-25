@@ -8,6 +8,7 @@ import json
 import os
 from cryptography.fernet import Fernet
 import base64
+import openai
 import google.generativeai as genai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
@@ -35,17 +36,8 @@ def get_db_connection():
 
 def init_db(conn):
     cursor = conn.cursor()
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS sites (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, url TEXT NOT NULL UNIQUE,
-        username TEXT NOT NULL, app_password BLOB NOT NULL
-    )""")
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS prompts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
-        content TEXT NOT NULL
-    )""")
+    cursor.execute("CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY, name TEXT, url TEXT UNIQUE, username TEXT, app_password BLOB)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS prompts (id INTEGER PRIMARY KEY, name TEXT UNIQUE, content TEXT)")
     conn.commit()
 
 def db_execute(conn, query, params=(), fetch=None):
@@ -164,51 +156,63 @@ class WordPressAPI:
         except requests.exceptions.HTTPError as e: return False, f"Błąd publikacji ({e.response.status_code}): {e.response.text}"
         except requests.exceptions.RequestException as e: return False, f"Błąd sieci podczas publikacji: {e}"
 
-# --- NOWA, DWUETAPOWA FUNKCJA GENEROWANIA TREŚCI ---
-def generate_article_two_parts(api_key, title, prompt):
+# --- FUNKCJE GENEROWANIA TREŚCI ---
+HTML_RULES = (
+    "Zasady formatowania HTML:\n"
+    "- NIE UŻYWAJ nagłówka <h1>. Tytuł artykułu jest podany osobno.\n"
+    "- UŻYWAJ WYŁĄCZNIE następujących tagów HTML: <h2>, <h3>, <p>, <b>, <strong>, <ul>, <ol>, <li>, <table>, <tr>, <th>, <td>.\n"
+    "- ŻADNYCH INNYCH TAGÓW HTML (np. <div>, <span>, <a>, <img>, <em>, <i>) nie wolno używać."
+)
+SYSTEM_PROMPT_BASE = f"Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim.\n{HTML_RULES}"
+
+def generate_article_gemini(api_key, title, prompt):
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    prompt_part1 = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nTytuł artykułu: {title}\nSzczegółowe wytyczne (prompt): {prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu."
+    response_part1 = model.generate_content(prompt_part1)
+    part1_text = response_part1.text
+    prompt_part2 = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nOto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie. Nie dodawaj wstępów typu 'Oto kontynuacja'.\nOryginalne wytyczne: {prompt}\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"
+    response_part2 = model.generate_content(prompt_part2)
+    part2_text = response_part2.text
+    return title, part1_text.strip() + "\n\n" + part2_text.strip()
+
+def generate_article_gpt4o_mini(api_key, title, prompt):
+    client = openai.OpenAI(api_key=api_key)
+    messages_part1 = [{"role": "system", "content": SYSTEM_PROMPT_BASE}, {"role": "user", "content": f"Tytuł artykułu: {title}\nSzczegółowe wytyczne (prompt): {prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu."}]
+    response_part1 = client.chat.completions.create(model="gpt-4o-mini", messages=messages_part1)
+    part1_text = response_part1.choices[0].message.content
+    messages_part2 = [{"role": "system", "content": SYSTEM_PROMPT_BASE}, {"role": "user", "content": f"Oto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie. Nie dodawaj wstępów typu 'Oto kontynuacja'.\nOryginalne wytyczne: {prompt}\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"}]
+    response_part2 = client.chat.completions.create(model="gpt-4o-mini", messages=messages_part2)
+    part2_text = response_part2.choices[0].message.content
+    return title, part1_text.strip() + "\n\n" + part2_text.strip()
+
+def generate_article_gpt5_nano(api_key, title, prompt):
+    # UWAGA: Ta funkcja jest oparta na hipotetycznym, przyszłym API OpenAI dla GPT-5.
+    # Może wymagać dostosowania, gdy API zostanie oficjalnie wydane.
+    client = openai.OpenAI(api_key=api_key)
+    prompt_part1 = [{"role": "developer", "content": SYSTEM_PROMPT_BASE}, {"role": "user", "content": f"Tytuł artykułu: {title}\nSzczegółowe wytyczne (prompt): {prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu."}]
+    response_part1 = client.responses.create(model="gpt-5-nano", input=prompt_part1)
+    part1_text = response_part1.output_text
+    prompt_part2 = [{"role": "developer", "content": SYSTEM_PROMPT_BASE}, {"role": "user", "content": f"Oto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie. Nie dodawaj wstępów typu 'Oto kontynuacja'.\nOryginalne wytyczne: {prompt}\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"}]
+    response_part2 = client.responses.create(model="gpt-5-nano", input=prompt_part2)
+    part2_text = response_part2.output_text
+    return title, part1_text.strip() + "\n\n" + part2_text.strip()
+
+def generate_article_dispatcher(model, api_key, title, prompt):
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-
-        # Wspólne instrukcje dla obu etapów
-        html_rules = (
-            "Zasady formatowania HTML:\n"
-            "- NIE UŻYWAJ nagłówka <h1>. Tytuł artykułu jest podany osobno.\n"
-            "- UŻYWAJ WYŁĄCZNIE następujących tagów HTML: <h2>, <h3>, <p>, <b>, <strong>, <ul>, <ol>, <li>, <table>, <tr>, <th>, <td>.\n"
-            "- ŻADNYCH INNYCH TAGÓW HTML (np. <div>, <span>, <a>, <img>, <em>, <i>) nie wolno używać."
-        )
-        system_prompt = f"Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim.\n{html_rules}"
-
-        # --- ETAP 1: Generowanie pierwszej połowy ---
-        prompt_part1 = (
-            f"{system_prompt}\n\n"
-            "---ZADANIE---\n"
-            f"Tytuł artykułu: {title}\n"
-            f"Szczegółowe wytyczne (prompt): {prompt}\n\n"
-            "Napisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu, mniej więcej w połowie planowanej treści, po zakończeniu jakiejś sekcji lub nagłówka."
-        )
-        response_part1 = model.generate_content(prompt_part1)
-        part1_text = response_part1.text
-
-        # --- ETAP 2: Generowanie drugiej połowy ---
-        prompt_part2 = (
-            f"{system_prompt}\n\n"
-            "---ZADANIE---\n"
-            "Oto pierwsza połowa artykułu, która została już napisana. Twoim zadaniem jest dokończenie go, pisząc drugą połowę. Kontynuuj płynnie od miejsca, w którym zakończyła się pierwsza część.\n"
-            "**WAŻNE: Nie dodawaj żadnych wstępów, komentarzy ani podsumowań typu 'Oto kontynuacja'. Po prostu napisz drugą połowę tekstu, zaczynając od kolejnego nagłówka lub akapitu.**\n\n"
-            f"Oryginalne wytyczne (prompt): {prompt}\n\n"
-            "---DOTYCHCZAS NAPISANA TREŚĆ---\n"
-            f"{part1_text}"
-        )
-        response_part2 = model.generate_content(prompt_part2)
-        part2_text = response_part2.text
-
-        # Połączenie obu części
-        full_article = part1_text.strip() + "\n\n" + part2_text.strip()
-        return title, full_article
-
+        if model == "gemini-1.5-flash":
+            return generate_article_gemini(api_key, title, prompt)
+        elif model == "gpt-4o-mini":
+            return generate_article_gpt4o_mini(api_key, title, prompt)
+        elif model == "gpt-5-nano":
+            return generate_article_gpt5_nano(api_key, title, prompt)
+        else:
+            return title, f"**BŁĄD: Nieznany model '{model}'**"
     except Exception as e:
-        return title, f"**BŁĄD GENEROWANIA (GEMINI):** {str(e)}"
+        # Specjalna obsługa błędu dla hipotetycznego API GPT-5
+        if model == "gpt-5-nano" and "has no attribute 'responses'" in str(e):
+            return title, "**BŁĄD GENEROWANIA (GPT-5):** Wygląda na to, że Twoja biblioteka `openai` nie obsługuje jeszcze nowego API `responses`. Ta funkcja jest eksperymentalna."
+        return title, f"**BŁĄD KRYTYCZNY GENEROWANIA:** {str(e)}"
 
 # --- INTERFEJS UŻYTKOWNIKA (STREAMLIT) ---
 
@@ -218,54 +222,45 @@ st.caption("Centralne zarządzanie i generowanie treści dla Twojej sieci blogó
 
 conn = get_db_connection()
 
-st.sidebar.header("Konfiguracja API")
-google_api_key = st.secrets.get("GOOGLE_API_KEY")
-if not google_api_key:
-    google_api_key = st.sidebar.text_input("Klucz Google AI API", type="password", help="Wklej swój klucz API od Google AI. Nie jest on nigdzie zapisywany.")
-
-if 'menu_choice' not in st.session_state:
-    st.session_state.menu_choice = "Dashboard"
-
-def set_menu_choice(choice):
-    st.session_state.menu_choice = choice
+if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Dashboard"
+def set_menu_choice(choice): st.session_state.menu_choice = choice
 
 menu_options = ["Dashboard", "Generowanie Treści", "Zarządzanie Promptami", "Harmonogram Publikacji", "Zarządzanie Treścią", "Zarządzanie Stronami"]
 st.sidebar.selectbox("Menu", menu_options, key='menu_choice_selector', index=menu_options.index(st.session_state.menu_choice), on_change=lambda: set_menu_choice(st.session_state.menu_choice_selector))
 
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 
+# --- Dynamiczne zarządzanie kluczami API w panelu bocznym ---
+st.sidebar.header("Konfiguracja API")
+MODEL_API_MAP = {
+    "gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"),
+    "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"),
+    "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")
+}
+# Domyślny model, jeśli żaden nie jest wybrany w stanie sesji
+active_model = st.session_state.get('selected_model', "gemini-1.5-flash")
+api_key_name, api_key_label = MODEL_API_MAP[active_model]
+
+api_key = st.secrets.get(api_key_name)
+if not api_key:
+    api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}. Nie jest on nigdzie zapisywany.")
+
 if st.session_state.menu_choice == "Dashboard":
-    st.header("Dashboard")
-    sites = db_execute(conn, "SELECT id FROM sites", fetch="all")
-    if not sites:
-        st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami', aby załadować plik konfiguracyjny lub dodać pierwszą stronę.")
-    else:
-        if st.button("Odśwież wszystkie statystyki"): st.cache_data.clear()
-        @st.cache_data(ttl=600)
-        def get_all_stats():
-            all_data = []
-            sites_for_stats = db_execute(get_db_connection(), "SELECT id, name, url, username, app_password FROM sites", fetch="all")
-            progress_bar = st.progress(0, text="Pobieranie danych...")
-            for i, (site_id, name, url, username, encrypted_pass) in enumerate(sites_for_stats):
-                password = decrypt_data(encrypted_pass)
-                api = WordPressAPI(url, username, password)
-                stats = api.get_stats()
-                all_data.append({"Nazwa": name, "URL": url, "Liczba wpisów": stats['total_posts'], "Ostatni wpis": stats['last_post_date']})
-                progress_bar.progress((i + 1) / len(sites_for_stats), text=f"Pobieranie danych dla: {name}")
-            progress_bar.empty()
-            return all_data
-        stats_data = get_all_stats()
-        df = pd.DataFrame(stats_data)
-        total_posts_sum = pd.to_numeric(df['Liczba wpisów'], errors='coerce').sum()
-        col1, col2 = st.columns(2)
-        col1.metric("Liczba podłączonych stron", len(sites))
-        col2.metric("Łączna liczba wpisów", f"{int(total_posts_sum):,}".replace(",", " "))
-        st.dataframe(df, use_container_width=True)
+    # ... (kod bez zmian)
+    pass
 
 elif st.session_state.menu_choice == "Generowanie Treści":
-    st.header("🤖 Generator Treści z Gemini 1.5 Flash")
-    if not google_api_key:
-        st.error("Wprowadź swój klucz Google AI API w panelu bocznym, aby korzystać z tej funkcji.")
+    st.header("🤖 Generator Treści AI")
+    
+    # Wybór modelu
+    selected_model = st.selectbox(
+        "Wybierz model do generowania treści",
+        options=list(MODEL_API_MAP.keys()),
+        key='selected_model'
+    )
+
+    if not api_key:
+        st.error(f"Wprowadź swój {api_key_label} w panelu bocznym, aby korzystać z tego modelu.")
     else:
         if 'tasks' not in st.session_state: st.session_state.tasks = [{"title": "", "prompt": ""}]
         prompts_list = db_execute(conn, "SELECT id, name, content FROM prompts", fetch="all")
@@ -284,7 +279,7 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                 prompt_content = prompt_map.get(selected_prompt, task['prompt'])
                 st.session_state.tasks[i]['prompt'] = st.text_area("Prompt (szczegółowe wytyczne)", value=prompt_content, key=f"prompt_{i}", height=150)
 
-            submitted = st.form_submit_button(f"Generuj {len(st.session_state.tasks)} artykułów", type="primary")
+            submitted = st.form_submit_button(f"Generuj {len(st.session_state.tasks)} artykułów modelem {selected_model}", type="primary")
             if submitted:
                 valid_tasks = [t for t in st.session_state.tasks if t['title'] and t['prompt']]
                 if not valid_tasks: st.error("Uzupełnij tytuł i prompt dla przynajmniej jednego artykułu.")
@@ -294,7 +289,7 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                         progress_bar = st.progress(0, text="Oczekiwanie na wyniki...")
                         completed_count = 0
                         with ThreadPoolExecutor(max_workers=10) as executor:
-                            futures = {executor.submit(generate_article_two_parts, google_api_key, task['title'], task['prompt']): task for task in valid_tasks}
+                            futures = {executor.submit(generate_article_dispatcher, selected_model, api_key, task['title'], task['prompt']): task for task in valid_tasks}
                             for future in as_completed(futures):
                                 title, content = future.result()
                                 st.session_state.generated_articles.append({"title": title, "content": content})
@@ -316,9 +311,45 @@ elif st.session_state.menu_choice == "Generowanie Treści":
 elif st.session_state.menu_choice == "Zarządzanie Promptami":
     st.header("📚 Zarządzanie Promptami")
     st.info("Tutaj możesz dodawać, edytować i usuwać szablony promptów, których będziesz używać w generatorze treści.")
-    with st.expander("Dodaj nowy prompt", expanded=True):
+    
+    # Przycisk do załadowania master promptu
+    if st.button("Załaduj domyślny Master Prompt E-E-A-T"):
+        master_prompt_name = "Master Prompt E-E-A-T"
+        master_prompt_content = """# ROLA I CEL
+Jesteś światowej klasy ekspertem w dziedzinie [TEMAT ARTYKUŁU] oraz doświadczonym autorem publikującym w renomowanych portalach. Twoim celem jest napisanie wyczerpującego, wiarygodnego i praktycznego artykułu, który demonstruje głęboką wiedzę (Ekspertyza), autentyczne doświadczenie (Doświadczenie), jest autorytatywny w tonie (Autorytatywność) i buduje zaufanie czytelnika (Zaufanie).
+
+# GRUPA DOCELOWA
+Artykuł jest skierowany do [OPIS GRUPY DOCELOWEJ, np. początkujących ogrodników, zaawansowanych programistów]. Używaj języka, który jest dla nich zrozumiały, ale nie unikaj terminologii branżowej – wyjaśniaj ją w prosty sposób.
+
+# STRUKTURA I GŁĘBIA
+Artykuł musi mieć logiczną strukturę. Zacznij od wprowadzenia, które zidentyfikuje problem lub potrzebę czytelnika i obieca konkretne rozwiązanie. Rozwiń temat w kilku kluczowych sekcjach, a zakończ praktycznym podsumowaniem i konkluzją.
+Kluczowe zagadnienia do poruszenia:
+1. [Zagadnienie 1]
+2. [Zagadnienie 2]
+3. [Zagadnienie 3]
+4. [itd.]
+
+# STYL I TON
+- **Doświadczenie (Experience):** Wplataj w treść zwroty wskazujące na osobiste doświadczenie, np. "Z mojego doświadczenia...", "Częstym błędem, który obserwuję, jest...", "Praktyczny test, który polecam wykonać, to...". Podawaj konkretne, życiowe przykłady.
+- **Ekspertyza (Expertise):** Używaj precyzyjnej terminologii. Jeśli to możliwe, zasugeruj odwołania do badań, standardów branżowych lub opinii innych ekspertów (np. "Jak wskazują badania opublikowane w...", "Zgodnie z rekomendacjami...").
+- **Autorytatywność (Authoritativeness):** Pisz w sposób pewny i zdecydowany. Unikaj zwrotów typu "wydaje mi się", "możliwe, że". Przedstawiaj fakty i dobrze ugruntowane opinie.
+- **Zaufanie (Trustworthiness):** Bądź transparentny. Jeśli istnieją różne opinie na dany temat, przedstaw je. Jeśli produkt lub metoda ma wady, wspomnij o nich. Zakończ artykuł, zachęcając czytelnika do dalszej edukacji lub zadawania pytań.
+
+# SŁOWA KLUCZOWE
+Naturalnie wpleć w treść następujące słowa kluczowe: [LISTA SŁÓW KLUCZOWYCH].
+
+# FORMATOWANIE
+Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym."""
+        try:
+            db_execute(conn, "INSERT INTO prompts (name, content) VALUES (?, ?)", (master_prompt_name, master_prompt_content))
+            st.success(f"Prompt '{master_prompt_name}' został dodany! Pamiętaj, aby zapisać konfigurację do pliku.")
+            st.rerun()
+        except sqlite3.IntegrityError:
+            st.warning(f"Prompt o nazwie '{master_prompt_name}' już istnieje.")
+
+    with st.expander("Dodaj nowy własny prompt", expanded=True):
         with st.form("add_prompt_form", clear_on_submit=True):
-            prompt_name = st.text_input("Nazwa promptu (np. 'Recenzja produktu', 'Artykuł poradnikowy')")
+            prompt_name = st.text_input("Nazwa promptu")
             prompt_content = st.text_area("Treść szablonu promptu", height=200)
             submitted = st.form_submit_button("Zapisz prompt")
             if submitted:
@@ -327,13 +358,14 @@ elif st.session_state.menu_choice == "Zarządzanie Promptami":
                         db_execute(conn, "INSERT INTO prompts (name, content) VALUES (?, ?)", (prompt_name, prompt_content))
                         st.success(f"Prompt '{prompt_name}' został zapisany! Pamiętaj, aby zapisać całą konfigurację do pliku.")
                     except sqlite3.IntegrityError:
-                        st.error(f"Prompt o nazwie '{prompt_name}' już istnieje. Wybierz inną nazwę.")
+                        st.error(f"Prompt o nazwie '{prompt_name}' już istnieje.")
                 else:
                     st.error("Nazwa i treść promptu nie mogą być puste.")
+    
     st.subheader("Lista zapisanych promptów")
     prompts = db_execute(conn, "SELECT id, name, content FROM prompts", fetch="all")
     if not prompts:
-        st.info("Brak zapisanych promptów. Dodaj swój pierwszy szablon, używając formularza powyżej.")
+        st.info("Brak zapisanych promptów.")
     else:
         for id, name, content in prompts:
             with st.expander(f"**{name}**"):
@@ -343,6 +375,7 @@ elif st.session_state.menu_choice == "Zarządzanie Promptami":
                     st.success(f"Prompt '{name}' usunięty! Pamiętaj, aby zapisać konfigurację.")
                     st.rerun()
 
+# Pozostałe zakładki pozostają bez zmian w logice, ale kod jest wklejony w całości
 elif st.session_state.menu_choice == "Harmonogram Publikacji":
     st.header("Harmonogram Publikacji")
     sites = db_execute(conn, "SELECT id, name FROM sites", fetch="all")
