@@ -164,17 +164,49 @@ class WordPressAPI:
         except requests.exceptions.HTTPError as e: return False, f"Błąd publikacji ({e.response.status_code}): {e.response.text}"
         except requests.exceptions.RequestException as e: return False, f"Błąd sieci podczas publikacji: {e}"
 
-# --- NOWA FUNKCJA DO GENEROWANIA TREŚCI Z GEMINI ---
-def generate_single_article_gemini(api_key, title, prompt):
+# --- NOWA, DWUETAPOWA FUNKCJA GENEROWANIA TREŚCI ---
+def generate_article_two_parts(api_key, title, prompt):
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        system_prompt = "Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim. Artykuł powinien być dobrze sformatowany w HTML, z użyciem nagłówków H2, H3, paragrafów, list i pogrubień."
-        full_prompt = f"{system_prompt}\n\n---ZADANIE---\nTytuł artykułu: {title}\n\nSzczegółowe wytyczne (prompt): {prompt}"
-        
-        response = model.generate_content(full_prompt)
-        return title, response.text
+
+        # Wspólne instrukcje dla obu etapów
+        html_rules = (
+            "Zasady formatowania HTML:\n"
+            "- NIE UŻYWAJ nagłówka <h1>. Tytuł artykułu jest podany osobno.\n"
+            "- UŻYWAJ WYŁĄCZNIE następujących tagów HTML: <h2>, <h3>, <p>, <b>, <strong>, <ul>, <ol>, <li>, <table>, <tr>, <th>, <td>.\n"
+            "- ŻADNYCH INNYCH TAGÓW HTML (np. <div>, <span>, <a>, <img>, <em>, <i>) nie wolno używać."
+        )
+        system_prompt = f"Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim.\n{html_rules}"
+
+        # --- ETAP 1: Generowanie pierwszej połowy ---
+        prompt_part1 = (
+            f"{system_prompt}\n\n"
+            "---ZADANIE---\n"
+            f"Tytuł artykułu: {title}\n"
+            f"Szczegółowe wytyczne (prompt): {prompt}\n\n"
+            "Napisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu, mniej więcej w połowie planowanej treści, po zakończeniu jakiejś sekcji lub nagłówka."
+        )
+        response_part1 = model.generate_content(prompt_part1)
+        part1_text = response_part1.text
+
+        # --- ETAP 2: Generowanie drugiej połowy ---
+        prompt_part2 = (
+            f"{system_prompt}\n\n"
+            "---ZADANIE---\n"
+            "Oto pierwsza połowa artykułu, która została już napisana. Twoim zadaniem jest dokończenie go, pisząc drugą połowę. Kontynuuj płynnie od miejsca, w którym zakończyła się pierwsza część.\n"
+            "**WAŻNE: Nie dodawaj żadnych wstępów, komentarzy ani podsumowań typu 'Oto kontynuacja'. Po prostu napisz drugą połowę tekstu, zaczynając od kolejnego nagłówka lub akapitu.**\n\n"
+            f"Oryginalne wytyczne (prompt): {prompt}\n\n"
+            "---DOTYCHCZAS NAPISANA TREŚĆ---\n"
+            f"{part1_text}"
+        )
+        response_part2 = model.generate_content(prompt_part2)
+        part2_text = response_part2.text
+
+        # Połączenie obu części
+        full_article = part1_text.strip() + "\n\n" + part2_text.strip()
+        return title, full_article
+
     except Exception as e:
         return title, f"**BŁĄD GENEROWANIA (GEMINI):** {str(e)}"
 
@@ -191,7 +223,6 @@ google_api_key = st.secrets.get("GOOGLE_API_KEY")
 if not google_api_key:
     google_api_key = st.sidebar.text_input("Klucz Google AI API", type="password", help="Wklej swój klucz API od Google AI. Nie jest on nigdzie zapisywany.")
 
-# Użycie session_state do zarządzania nawigacją
 if 'menu_choice' not in st.session_state:
     st.session_state.menu_choice = "Dashboard"
 
@@ -199,7 +230,7 @@ def set_menu_choice(choice):
     st.session_state.menu_choice = choice
 
 menu_options = ["Dashboard", "Generowanie Treści", "Zarządzanie Promptami", "Harmonogram Publikacji", "Zarządzanie Treścią", "Zarządzanie Stronami"]
-st.sidebar.selectbox("Menu", menu_options, key='menu_choice_selector', on_change=lambda: set_menu_choice(st.session_state.menu_choice_selector))
+st.sidebar.selectbox("Menu", menu_options, key='menu_choice_selector', index=menu_options.index(st.session_state.menu_choice), on_change=lambda: set_menu_choice(st.session_state.menu_choice_selector))
 
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 
@@ -263,7 +294,7 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                         progress_bar = st.progress(0, text="Oczekiwanie na wyniki...")
                         completed_count = 0
                         with ThreadPoolExecutor(max_workers=10) as executor:
-                            futures = {executor.submit(generate_single_article_gemini, google_api_key, task['title'], task['prompt']): task for task in valid_tasks}
+                            futures = {executor.submit(generate_article_two_parts, google_api_key, task['title'], task['prompt']): task for task in valid_tasks}
                             for future in as_completed(futures):
                                 title, content = future.result()
                                 st.session_state.generated_articles.append({"title": title, "content": content})
