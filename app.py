@@ -281,35 +281,33 @@ if st.session_state.menu_choice == "Zarządzanie Stronami":
     st.info("To jest Twój punkt startowy. Załaduj zapisaną konfigurację lub dodaj swoje strony WordPress.")
     
     st.subheader("1. Załaduj lub Zapisz Konfigurację")
-    col1, col2 = st.columns(2)
-    with col1:
-        uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny (`pbn_config.json`)", type="json", key="config_uploader")
-        if uploaded_file is not None:
-            if uploaded_file.file_id != st.session_state.get('last_uploaded_file_id'):
-                try:
-                    config_data = json.load(uploaded_file)
-                    db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas")
-                    for site in config_data.get('sites', []):
-                        encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
-                        db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
-                    for persona in config_data.get('personas', []):
-                        db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
-                    st.session_state.last_uploaded_file_id = uploaded_file.file_id
-                    st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Błąd podczas przetwarzania pliku: {e}")
-    with col2:
-        sites_for_export = db_execute(conn, "SELECT name, url, username, app_password FROM sites", fetch="all")
-        personas_for_export = db_execute(conn, "SELECT name, description FROM personas", fetch="all")
-        if sites_for_export or personas_for_export:
-            export_data = {'sites': [], 'personas': []}
-            for name, url, username, encrypted_pass_bytes in sites_for_export:
-                encrypted_pass_b64 = base64.b64encode(encrypted_pass_bytes).decode('utf-8')
-                export_data['sites'].append({'name': name, 'url': url, 'username': username, 'app_password_b64': encrypted_pass_b64})
-            for name, description in personas_for_export:
-                export_data['personas'].append({'name': name, 'description': description})
-            st.download_button(label="Pobierz konfigurację do pliku", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
+    uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny (`pbn_config.json`)", type="json", key="config_uploader")
+    if uploaded_file is not None:
+        if uploaded_file.file_id != st.session_state.get('last_uploaded_file_id'):
+            try:
+                config_data = json.load(uploaded_file)
+                db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas")
+                for site in config_data.get('sites', []):
+                    encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
+                    db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
+                for persona in config_data.get('personas', []):
+                    db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
+                st.session_state.last_uploaded_file_id = uploaded_file.file_id
+                st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Błąd podczas przetwarzania pliku: {e}")
+    
+    sites_for_export = db_execute(conn, "SELECT name, url, username, app_password FROM sites", fetch="all")
+    personas_for_export = db_execute(conn, "SELECT name, description FROM personas", fetch="all")
+    if sites_for_export or personas_for_export:
+        export_data = {'sites': [], 'personas': []}
+        for name, url, username, encrypted_pass_bytes in sites_for_export:
+            encrypted_pass_b64 = base64.b64encode(encrypted_pass_bytes).decode('utf-8')
+            export_data['sites'].append({'name': name, 'url': url, 'username': username, 'app_password_b64': encrypted_pass_b64})
+        for name, description in personas_for_export:
+            export_data['personas'].append({'name': name, 'description': description})
+        st.download_button(label="Pobierz konfigurację do pliku", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
     
     st.divider()
     st.subheader("2. Dodaj nową stronę")
