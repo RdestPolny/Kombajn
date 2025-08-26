@@ -3,7 +3,7 @@ import sqlite3
 import pandas as pd
 import requests
 from requests.auth import HTTPBasicAuth
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 from cryptography.fernet import Fernet
@@ -106,7 +106,11 @@ class WordPressAPI:
         else:
             st.warning("Serwer nie zwrócił osadzonych danych. Dociąganie informacji...")
             author_ids = {p['author'] for p in posts_data}
-            author_map = {author_id: self._make_request(f"users/{author_id}", display_error=False).get('name', 'N/A') for author_id in author_ids}
+            author_map = {}
+            for author_id in author_ids:
+                user_data = self._make_request(f"users/{author_id}", display_error=False)
+                if user_data:  # NAPRAWA BŁĘDU: Sprawdź, czy user_data nie jest None
+                    author_map[author_id] = user_data.get('name', 'N/A')
             category_ids = {cid for p in posts_data for cid in p['categories']}
             category_map = {cat['id']: cat['name'] for cat in self._make_request("categories", params={"include": ",".join(map(str, category_ids))}) or []}
             final_posts = []
@@ -173,7 +177,7 @@ Kluczowe zagadnienia do poruszenia:
 
 # STYL I TON
 - **Doświadczenie (Experience):** Wplataj w treść zwroty wskazujące na osobiste doświadczenie, np. "Z mojego doświadczenia...", "Częstym błędem, który obserwuję, jest...".
-- **Ekspertyza (Expertise):** Używaj precyzyjnej terminologii.
+- **Ekspertyza (Expertise):** Używaj precyzcynej terminologii.
 - **Autorytatywność (Authoritativeness):** Pisz w sposób pewny i zdecydowany.
 - **Zaufanie (Trustworthiness):** Bądź transparentny. Jeśli produkt lub metoda ma wady, wspomnij o nich.
 
@@ -263,7 +267,7 @@ if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs
 
 st.sidebar.header("Konfiguracja API")
 MODEL_API_MAP = {"gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")}
-active_model_for_articles = st.session_state.get('selected_model_for_articles', "gemini-1.5-flash")
+active_model_for_articles = st.session_state.get('selected_model_for_articles', "gpt-5-nano") # ZMIANA DOMYŚLNEGO MODELU
 active_model_for_briefs = "gpt-5-nano"
 active_model = active_model_for_briefs if st.session_state.menu_choice == "Generator Briefów" else active_model_for_articles
 api_key_name, api_key_label = MODEL_API_MAP[active_model]
@@ -271,9 +275,60 @@ api_key = st.secrets.get(api_key_name)
 if not api_key:
     api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}.")
 
+with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
+    uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json")
+    if uploaded_file is not None:
+        try:
+            config_data = json.load(uploaded_file)
+            db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas")
+            for site in config_data.get('sites', []):
+                encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
+                db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
+            for persona in config_data.get('personas', []):
+                db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
+            st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Błąd podczas przetwarzania pliku: {e}")
+    
+    sites_for_export = db_execute(conn, "SELECT name, url, username, app_password FROM sites", fetch="all")
+    personas_for_export = db_execute(conn, "SELECT name, description FROM personas", fetch="all")
+    if sites_for_export or personas_for_export:
+        export_data = {'sites': [], 'personas': []}
+        for name, url, username, encrypted_pass_bytes in sites_for_export:
+            encrypted_pass_b64 = base64.b64encode(encrypted_pass_bytes).decode('utf-8')
+            export_data['sites'].append({'name': name, 'url': url, 'username': username, 'app_password_b64': encrypted_pass_b64})
+        for name, description in personas_for_export:
+            export_data['personas'].append({'name': name, 'description': description})
+        st.download_button(label="Pobierz konfigurację", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
+
 if st.session_state.menu_choice == "Dashboard":
-    # ... (kod bez zmian)
-    pass
+    st.header("Dashboard")
+    sites = db_execute(conn, "SELECT id FROM sites", fetch="all")
+    if not sites:
+        st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami' lub załaduj plik konfiguracyjny w panelu bocznym.")
+    else:
+        if st.button("Odśwież wszystkie statystyki"): st.cache_data.clear()
+        @st.cache_data(ttl=600)
+        def get_all_stats():
+            all_data = []
+            sites_for_stats = db_execute(get_db_connection(), "SELECT id, name, url, username, app_password FROM sites", fetch="all")
+            progress_bar = st.progress(0, text="Pobieranie danych...")
+            for i, (site_id, name, url, username, encrypted_pass) in enumerate(sites_for_stats):
+                password = decrypt_data(encrypted_pass)
+                api = WordPressAPI(url, username, password)
+                stats = api.get_stats()
+                all_data.append({"Nazwa": name, "URL": url, "Liczba wpisów": stats['total_posts'], "Ostatni wpis": stats['last_post_date']})
+                progress_bar.progress((i + 1) / len(sites_for_stats), text=f"Pobieranie danych dla: {name}")
+            progress_bar.empty()
+            return all_data
+        stats_data = get_all_stats()
+        df = pd.DataFrame(stats_data)
+        total_posts_sum = pd.to_numeric(df['Liczba wpisów'], errors='coerce').sum()
+        col1, col2 = st.columns(2)
+        col1.metric("Liczba podłączonych stron", len(sites))
+        col2.metric("Łączna liczba wpisów", f"{int(total_posts_sum):,}".replace(",", " "))
+        st.dataframe(df, use_container_width=True)
 
 elif st.session_state.menu_choice == "Generator Briefów":
     st.header("📝 Generator Briefów z GPT-5 Nano")
@@ -359,20 +414,8 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                         completed_count += 1
                                         progress_bar.progress(completed_count / len(tasks_to_run), text=f"Ukończono {completed_count}/{len(tasks_to_run)}...")
                             st.success("Generowanie artykułów zakończone!")
-    if st.session_state.generated_articles:
-        st.subheader("Wygenerowane Artykuły")
-        for i, article in enumerate(st.session_state.generated_articles):
-            with st.expander(f"**{i+1}. {article['title']}**"):
-                st.markdown(article['content'], unsafe_allow_html=True)
-                st.caption(f"Meta Tytuł: {article.get('meta_title', '')}")
-                st.caption(f"Meta Opis: {article.get('meta_description', '')}")
-                if st.button("Zaplanuj publikację", key=f"plan_{i}"):
-                    st.session_state.prefill_title = article['title']
-                    st.session_state.prefill_content = article['content']
-                    st.session_state.prefill_meta_title = article.get('meta_title', '')
-                    st.session_state.prefill_meta_description = article.get('meta_description', '')
-                    set_menu_choice("Harmonogram Publikacji")
-                    st.rerun()
+                            set_menu_choice("Harmonogram Publikacji")
+                            st.rerun()
 
 elif st.session_state.menu_choice == "Zarządzanie Personami":
     st.header("🎭 Zarządzanie Personami")
@@ -404,59 +447,69 @@ elif st.session_state.menu_choice == "Zarządzanie Personami":
                     st.success(f"Persona '{name}' usunięta! Pamiętaj, aby zapisać konfigurację.")
                     st.rerun()
 
-# Pozostałe zakładki pozostają bez zmian w logice
 elif st.session_state.menu_choice == "Harmonogram Publikacji":
     st.header("Harmonogram Publikacji")
-    sites = db_execute(conn, "SELECT id, name FROM sites", fetch="all")
-    site_options = {name: site_id for site_id, name in sites}
-    if not site_options: st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
+    st.info("Krok 3: Wybierz artykuły, ustawienia publikacji i zaplanuj je z rozłożeniem w czasie.")
+    if not st.session_state.generated_articles:
+        st.warning("Brak wygenerowanych artykułów. Przejdź do 'Generator Briefów', a następnie 'Generowanie Treści'.")
     else:
-        title_value = st.session_state.get('prefill_title', '')
-        content_value = st.session_state.get('prefill_content', '')
-        meta_title_value = st.session_state.get('prefill_meta_title', '')
-        meta_desc_value = st.session_state.get('prefill_meta_description', '')
-        with st.form("schedule_post_form"):
-            st.subheader("Nowy wpis")
-            selected_sites_names = st.multiselect("Wybierz strony docelowe", options=site_options.keys())
-            title = st.text_input("Tytuł wpisu", value=title_value)
-            content = st.text_area("Treść wpisu (obsługuje HTML)", value=content_value, height=400)
-            st.subheader("Ustawienia dodatkowe (opcjonalne)")
-            featured_image_url = st.text_input("URL obrazka wyróżniającego", help="Wklej bezpośredni link do obrazka. Zostanie on automatycznie wgrany na stronę.")
-            col_meta1, col_meta2 = st.columns(2)
-            meta_title = col_meta1.text_input("Meta Tytuł", value=meta_title_value, help="Kompatybilne z Yoast, Rank Math, AIOSEO.")
-            meta_description = col_meta2.text_area("Meta Opis", value=meta_desc_value, height=100, help="Kompatybilne z Yoast, Rank Math, AIOSEO.")
-            st.subheader("Kategorie, Tagi i Data")
-            cols_meta = st.columns(2)
-            categories_str = cols_meta[0].text_input("Kategorie (oddzielone przecinkami)")
-            tags_str = cols_meta[1].text_input("Tagi (oddzielone przecinkami)")
-            cols_date = st.columns(2)
-            publish_date = cols_date[0].date_input("Data publikacji", min_value=datetime.now())
-            publish_time = cols_date[1].time_input("Godzina publikacji")
-            submit_button = st.form_submit_button("Zaplanuj wpis")
-            if submit_button:
-                for key in ['prefill_title', 'prefill_content', 'prefill_meta_title', 'prefill_meta_description']:
-                    if key in st.session_state: del st.session_state[key]
-                if not all([selected_sites_names, title, content]): st.error("Musisz wybrać stronę, tytuł i treść.")
-                else:
-                    publish_datetime = datetime.combine(publish_date, publish_time).isoformat()
-                    with st.spinner("Przetwarzanie..."):
-                        for site_name in selected_sites_names:
-                            site_id = site_options[site_name]
-                            site_info = db_execute(conn, "SELECT url, username, app_password FROM sites WHERE id = ?", (site_id,), fetch="one")
-                            url, username, encrypted_pass = site_info
-                            password = decrypt_data(encrypted_pass)
-                            api = WordPressAPI(url, username, password)
-                            available_categories = api.get_categories()
-                            target_category_ids = []
-                            if categories_str:
-                                input_categories = [cat.strip() for cat in categories_str.split(',')]
-                                for cat_name in input_categories:
-                                    if cat_name in available_categories: target_category_ids.append(available_categories[cat_name])
-                                    else: st.warning(f"Na stronie '{site_name}' nie znaleziono kategorii '{cat_name}'.")
-                            target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
-                            success, message = api.publish_post(title, content, "future", publish_datetime, target_category_ids, target_tags, featured_image_url=featured_image_url, meta_title=meta_title, meta_description=meta_description)
-                            if success: st.success(f"[{site_name}]: {message}")
-                            else: st.error(f"[{site_name}]: {message}")
+        sites = db_execute(conn, "SELECT id, name FROM sites", fetch="all")
+        site_options = {name: site_id for site_id, name in sites}
+        if not site_options: st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
+        else:
+            df = pd.DataFrame(st.session_state.generated_articles)
+            df['Zaznacz'] = False
+            with st.form("bulk_schedule_form"):
+                st.subheader("1. Wybierz artykuły do publikacji")
+                edited_df = st.data_editor(df[['Zaznacz', 'title', 'meta_title', 'meta_description']], hide_index=True, use_container_width=True,
+                                           column_config={"title": "Tytuł Artykułu", "meta_title": "Meta Tytuł", "meta_description": "Meta Opis"})
+                st.subheader("2. Ustawienia publikacji")
+                selected_sites_names = st.multiselect("Wybierz strony docelowe", options=site_options.keys())
+                categories_str = st.text_input("Kategorie (wspólne dla wszystkich, oddzielone przecinkami)")
+                tags_str = st.text_input("Tagi (wspólne dla wszystkich, oddzielone przecinkami)")
+                featured_image_url = st.text_input("URL obrazka wyróżniającego (wspólny dla wszystkich)")
+                st.subheader("3. Planowanie w czasie (Staggering)")
+                col_date1, col_date2, col_date3 = st.columns(3)
+                start_date = col_date1.date_input("Data publikacji pierwszego artykułu", min_value=datetime.now())
+                start_time = col_date2.time_input("Godzina publikacji pierwszego artykułu")
+                interval_hours = col_date3.number_input("Odstęp między publikacjami (w godzinach)", min_value=1, value=8)
+                
+                submitted = st.form_submit_button("Zaplanuj zaznaczone artykuły", type="primary")
+                if submitted:
+                    selected_articles = edited_df[edited_df.Zaznacz]
+                    if selected_articles.empty or not selected_sites_names:
+                        st.error("Zaznacz przynajmniej jeden artykuł i jedną stronę docelową.")
+                    else:
+                        current_publish_time = datetime.combine(start_date, start_time)
+                        with st.spinner("Planowanie publikacji..."):
+                            for index, row in selected_articles.iterrows():
+                                full_article_data = st.session_state.generated_articles[index]
+                                for site_name in selected_sites_names:
+                                    site_id = site_options[site_name]
+                                    site_info = db_execute(conn, "SELECT url, username, app_password FROM sites WHERE id = ?", (site_id,), fetch="one")
+                                    url, username, encrypted_pass = site_info
+                                    password = decrypt_data(encrypted_pass)
+                                    api = WordPressAPI(url, username, password)
+                                    available_categories = api.get_categories()
+                                    target_category_ids = []
+                                    if categories_str:
+                                        input_categories = [cat.strip() for cat in categories_str.split(',')]
+                                        for cat_name in input_categories:
+                                            if cat_name in available_categories: target_category_ids.append(available_categories[cat_name])
+                                            else: st.warning(f"Na stronie '{site_name}' nie znaleziono kategorii '{cat_name}'.")
+                                    target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
+                                    
+                                    st.info(f"Planowanie '{row['title']}' na {site_name} na dzień {current_publish_time.strftime('%Y-%m-%d %H:%M')}...")
+                                    success, message = api.publish_post(
+                                        row['title'], full_article_data['content'], "future", current_publish_time.isoformat(),
+                                        target_category_ids, target_tags, featured_image_url=featured_image_url,
+                                        meta_title=row['meta_title'], meta_description=row['meta_description']
+                                    )
+                                    if success: st.success(f"[{site_name}]: {message}")
+                                    else: st.error(f"[{site_name}]: {message}")
+                                # Po zaplanowaniu artykułu na wszystkich stronach, zwiększ czas dla następnego
+                                current_publish_time += timedelta(hours=interval_hours)
+                        st.success("Zakończono planowanie wszystkich zaznaczonych artykułów!")
 
 elif st.session_state.menu_choice == "Zarządzanie Treścią":
     st.header("Zarządzanie Treścią i Masowa Edycja")
@@ -514,43 +567,10 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
                     st.caption("Zaznacz przynajmniej jeden wpis, aby aktywować panel masowej edycji.")
 
 elif st.session_state.menu_choice == "Zarządzanie Stronami":
-    st.header("Zarządzanie Stronami i Konfiguracją")
-    st.info("""
-    **Jak to działa na Streamlit Cloud?**
-    1.  **Ładuj:** Na początku sesji załaduj swój plik `pbn_config.json`.
-    2.  **Pracuj:** Dodawaj, usuwaj i edytuj strony/persony.
-    3.  **Zapisuj:** Przed zamknięciem karty **zawsze** zapisuj zmiany, pobierając nowy plik konfiguracyjny.
-    """)
-    st.subheader("1. Załaduj lub Zapisz Konfigurację")
-    col1, col2 = st.columns(2)
-    with col1:
-        uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny (`pbn_config.json`)", type="json")
-        if uploaded_file is not None:
-            try:
-                config_data = json.load(uploaded_file)
-                db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas")
-                for site in config_data.get('sites', []):
-                    encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
-                    db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
-                for persona in config_data.get('personas', []):
-                    db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
-                st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person! Strona zostanie odświeżona.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Błąd podczas przetwarzania pliku: {e}")
-    with col2:
-        sites_for_export = db_execute(conn, "SELECT name, url, username, app_password FROM sites", fetch="all")
-        personas_for_export = db_execute(conn, "SELECT name, description FROM personas", fetch="all")
-        if sites_for_export or personas_for_export:
-            export_data = {'sites': [], 'personas': []}
-            for name, url, username, encrypted_pass_bytes in sites_for_export:
-                encrypted_pass_b64 = base64.b64encode(encrypted_pass_bytes).decode('utf-8')
-                export_data['sites'].append({'name': name, 'url': url, 'username': username, 'app_password_b64': encrypted_pass_b64})
-            for name, description in personas_for_export:
-                export_data['personas'].append({'name': name, 'description': description})
-            st.download_button(label="Pobierz konfigurację do pliku", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
-    st.divider()
-    st.subheader("2. Dodaj nową stronę")
+    st.header("Zarządzanie Stronami")
+    st.info("W tej sekcji możesz dodać lub usunąć strony WordPress z bieżącej sesji. Pamiętaj, aby zapisać zmiany do pliku konfiguracyjnego w panelu bocznym.")
+    
+    st.subheader("Dodaj nową stronę")
     with st.form("add_site_form", clear_on_submit=True):
         name = st.text_input("Przyjazna nazwa strony")
         url = st.text_input("URL strony", placeholder="https://twojastrona.pl")
@@ -570,7 +590,8 @@ elif st.session_state.menu_choice == "Zarządzanie Stronami":
                         st.success(f"Strona '{name}' dodana! Pamiętaj, aby zapisać konfigurację do pliku.")
                     except sqlite3.IntegrityError: st.error(f"Strona o URL '{url}' już istnieje w bazie.")
                 else: st.error(f"Nie udało się dodać strony. Błąd: {message}")
-    st.subheader("3. Lista załadowanych stron")
+    
+    st.subheader("Lista załadowanych stron")
     sites = db_execute(conn, "SELECT id, name, url, username FROM sites", fetch="all")
     if not sites: st.info("Brak załadowanych stron.")
     else:
