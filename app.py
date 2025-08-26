@@ -49,7 +49,7 @@ def db_execute(conn, query, params=(), fetch=None):
     conn.commit()
     return result
 
-# --- KLASA DO OBSŁUGI WORDPRESS REST API (bez zmian) ---
+# --- KLASA DO OBSŁUGI WORDPRESS REST API ---
 class WordPressAPI:
     def __init__(self, url, username, password):
         self.base_url = url.rstrip('/') + "/wp-json/wp/v2"
@@ -166,7 +166,8 @@ MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
 Artykuł jest skierowany do {{GRUPA_DOCELOWA}}. Używaj języka, który jest dla nich zrozumiały, ale nie unikaj terminologii branżowej – wyjaśniaj ją w prosty sposób.
 
 # STRUKTURA I GŁĘBIA
-Artykuł musi mieć logiczną strukturę. Zacznij od wprowadzenia, które zidentyfikuje problem lub potrzebę czytelnika i obieca konkretne rozwiązanie. Rozwiń temat w kilku kluczowych sekcjach, a zakończ praktycznym podsumowaniem i konkluzją.
+**Zasada Odwróconej Piramidy:** Rozpocznij artykuł od razu od konkretnej i zwięzłej odpowiedzi na główne pytanie zawarte w tytule. Pierwszy akapit (lead) musi dostarczać natychmiastowej wartości. Dopiero w dalszej części rozwiń temat szczegółowo.
+Artykuł musi mieć logiczną strukturę. Rozwiń temat w kilku kluczowych sekcjach, a zakończ praktycznym podsumowaniem.
 Kluczowe zagadnienia do poruszenia:
 {{ZAGADNIENIA_KLUCZOWE}}
 
@@ -178,6 +179,7 @@ Kluczowe zagadnienia do poruszenia:
 
 # SŁOWA KLUCZOWE
 Naturalnie wpleć w treść następujące słowa kluczowe: {{SLOWA_KLUCZOWE}}.
+Dodatkowo, wpleć w treść poniższe frazy semantyczne, aby zwiększyć głębię tematyczną: {{DODATKOWE_SLOWA_SEMANTYCZNE}}.
 
 # FORMATOWANIE
 Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym."""
@@ -214,7 +216,15 @@ def generate_article_dispatcher(model, api_key, title, prompt):
 
 def generate_single_brief_gpt5(api_key, topic):
     try:
-        prompt = f"""Jesteś strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na temat: "{topic}". Brief musi być w formacie JSON i zawierać klucze: "temat_artykulu", "grupa_docelowa", "zagadnienia_kluczowe" (array 3-5 stringów), "slowa_kluczowe" (array 5-10 stringów). Wygeneruj brief JSON dla tematu: "{topic}" """
+        prompt = f"""Jesteś strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na temat: "{topic}".
+Brief musi być w formacie JSON i zawierać klucze:
+- "temat_artykulu": Dokładny, angażujący tytuł.
+- "grupa_docelowa": Krótki opis, dla kogo jest artykuł.
+- "zagadnienia_kluczowe": Array 3-5 głównych sekcji (nagłówków H2).
+- "slowa_kluczowe": Array 5-10 głównych słów kluczowych.
+- "dodatkowe_slowa_semantyczne": Array 5-10 fraz i kolokacji semantycznie wspierających główny temat.
+
+Wygeneruj brief JSON dla tematu: "{topic}" """
         json_string = call_gpt5_nano(api_key, prompt).strip().replace("```json", "").replace("```", "")
         return topic, json.loads(json_string)
     except Exception as e:
@@ -225,8 +235,8 @@ def generate_meta_tags_gpt5(api_key, article_title, article_content, keywords):
         prompt = f"""Jesteś ekspertem SEO copywritingu. Przeanalizuj poniższy artykuł i stwórz do niego idealne meta tagi.
 Temat główny: {article_title}
 Słowa kluczowe: {", ".join(keywords)}
-Treść artykułu:
-{article_content[:3000]}
+Treść artykułu (fragment):
+{article_content[:2500]}
 
 Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (max 60 znaków, angażujący, z główną frazą na początku) i "meta_description" (max 155 znaków, zachęcający do kliknięcia, z call-to-action i słowami kluczowymi)."""
         json_string = call_gpt5_nano(api_key, prompt).strip().replace("```json", "").replace("```", "")
@@ -330,12 +340,13 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                 final_prompt = final_prompt.replace("{{TEMAT_ARTYKULU}}", brief_data.get("temat_artykulu", row["Temat"]))
                                 final_prompt = final_prompt.replace("{{GRUPA_DOCELOWA}}", brief_data.get("grupa_docelowa", ""))
                                 final_prompt = final_prompt.replace("{{SLOWA_KLUCZOWE}}", ", ".join(brief_data.get("slowa_kluczowe", [])))
+                                final_prompt = final_prompt.replace("{{DODATKOWE_SLOWA_SEMANTYCZNE}}", ", ".join(brief_data.get("dodatkowe_slowa_semantyczne", [])))
                                 zagadnienia_str = "\n".join([f"- {z}" for z in brief_data.get("zagadnienia_kluczowe", [])])
                                 final_prompt = final_prompt.replace("{{ZAGADNIENIA_KLUCZOWE}}", zagadnienia_str)
                                 tasks_to_run.append({'title': brief_data.get("temat_artykulu", row["Temat"]), 'prompt': final_prompt, 'keywords': brief_data.get("slowa_kluczowe", [])})
                             st.session_state.generated_articles = []
                             with st.spinner(f"Generowanie {len(tasks_to_run)} artykułów..."):
-                                progress_bar = st.progress(0, text="Generowanie treści...")
+                                progress_bar = st.progress(0)
                                 completed_count = 0
                                 with ThreadPoolExecutor(max_workers=10) as executor:
                                     future_to_task = {executor.submit(generate_article_dispatcher, selected_model, api_key, task['title'], task['prompt']): task for task in tasks_to_run}
@@ -423,10 +434,8 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
             publish_time = cols_date[1].time_input("Godzina publikacji")
             submit_button = st.form_submit_button("Zaplanuj wpis")
             if submit_button:
-                # Czyszczenie stanu po wysłaniu
                 for key in ['prefill_title', 'prefill_content', 'prefill_meta_title', 'prefill_meta_description']:
                     if key in st.session_state: del st.session_state[key]
-                
                 if not all([selected_sites_names, title, content]): st.error("Musisz wybrać stronę, tytuł i treść.")
                 else:
                     publish_datetime = datetime.combine(publish_date, publish_time).isoformat()
