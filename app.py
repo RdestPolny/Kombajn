@@ -13,7 +13,6 @@ import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 import io
-import re
 
 # --- KONFIGURACJA I INICJALIZACJA ---
 
@@ -39,11 +38,6 @@ def init_db(conn):
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY, name TEXT, url TEXT UNIQUE, username TEXT, app_password BLOB)")
     cursor.execute("CREATE TABLE IF NOT EXISTS personas (id INTEGER PRIMARY KEY, name TEXT UNIQUE, description TEXT)")
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS interlinks (
-        id INTEGER PRIMARY KEY, keyword TEXT NOT NULL UNIQUE, keyword_variations TEXT,
-        url TEXT NOT NULL, source_post_id INTEGER, source_site_id INTEGER, type TEXT NOT NULL DEFAULT 'manual'
-    )""")
     conn.commit()
 
 def db_execute(conn, query, params=(), fetch=None):
@@ -147,8 +141,10 @@ class WordPressAPI:
         except requests.exceptions.HTTPError as e: return False, f"Błąd aktualizacji wpisu ID {post_id} ({e.response.status_code}): {e.response.text}"
         except requests.exceptions.RequestException as e: return False, f"Błąd sieci przy aktualizacji wpisu ID {post_id}: {e}"
 
-    def publish_post(self, title, content, status, publish_date, category_ids, tags, featured_image_url=None, meta_title=None, meta_description=None):
+    def publish_post(self, title, content, status, publish_date, category_ids, tags, author_id=None, featured_image_url=None, meta_title=None, meta_description=None):
         post_data = {'title': title, 'content': content, 'status': status, 'date': publish_date, 'categories': category_ids, 'tags': tags}
+        if author_id:
+            post_data['author'] = int(author_id)
         if featured_image_url:
             media_id = self.upload_image(featured_image_url)
             if media_id:
@@ -166,7 +162,7 @@ class WordPressAPI:
         except requests.exceptions.HTTPError as e: return False, f"Błąd publikacji ({e.response.status_code}): {e.response.text}", None
         except requests.exceptions.RequestException as e: return False, f"Błąd sieci podczas publikacji: {e}", None
 
-# --- LOGIKA GENEROWANIA TREŚCI I LINKOWANIA ---
+# --- LOGIKA GENEROWANIA TREŚCI ---
 HTML_RULES = "Zasady formatowania HTML:\n- NIE UŻYWAJ <h1>.\n- UŻYWAJ WYŁĄCZNIE: <h2>, <h3>, <p>, <b>, <strong>, <ul>, <ol>, <li>, <table>, <tr>, <th>, <td>."
 SYSTEM_PROMPT_BASE = f"Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim.\n{HTML_RULES}"
 MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
@@ -254,32 +250,6 @@ Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (m
     except Exception:
         return {"meta_title": article_title, "meta_description": ""}
 
-def generate_keyword_variations_gpt5(api_key, keywords):
-    try:
-        prompt = f"""Jesteś lingwistą i ekspertem SEO. Dla podanej listy słów kluczowych, wygeneruj ich najważniejsze odmiany gramatyczne i bliskie synonimy.
-Zwróć odpowiedź WYŁĄCZNIE w formacie JSON, gdzie kluczem jest oryginalna fraza, a wartością jest lista 3-4 jej odmian.
-Lista słów: {json.dumps(keywords, ensure_ascii=False)}"""
-        json_string = call_gpt5_nano(api_key, prompt).strip().replace("```json", "").replace("```", "")
-        return json.loads(json_string)
-    except Exception:
-        return {kw: [kw] for kw in keywords}
-
-def apply_interlinking(content, links_library):
-    for link in links_library:
-        all_keywords = [link['keyword']] + json.loads(link.get('keyword_variations', '[]'))
-        # Używamy seta, aby uniknąć duplikatów i sortujemy od najdłuższej frazy do najkrótszej, aby uniknąć błędów
-        unique_keywords = sorted(list(set(all_keywords)), key=len, reverse=True)
-        
-        for keyword in unique_keywords:
-            # Regex, który znajduje słowo, ale nie wewnątrz tagów HTML i nie wewnątrz istniejących linków
-            pattern = re.compile(r'\b(' + re.escape(keyword) + r')\b(?![^<]*>|[^<>]*</a)', re.IGNORECASE)
-            # Podmień tylko pierwsze znalezione wystąpienie
-            if pattern.search(content):
-                replacement = f'<a href="{link["url"]}">{keyword}</a>'
-                content = pattern.sub(replacement, content, 1)
-                break # Przejdź do następnego linku z biblioteki po znalezieniu dopasowania
-    return content
-
 # --- INTERFEJS UŻYTKOWNIKA (STREAMLIT) ---
 
 st.set_page_config(layout="wide", page_title="PBN Manager")
@@ -293,7 +263,7 @@ if 'generated_articles' not in st.session_state: st.session_state.generated_arti
 if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
 
 st.sidebar.header("Menu Główne")
-menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Biblioteka Linkowania", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "Dashboard"]
+menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "Dashboard"]
 st.session_state.menu_choice = st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_radio', label_visibility="collapsed")
 
 st.sidebar.header("Konfiguracja API")
@@ -312,40 +282,34 @@ with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
         if uploaded_file.file_id != st.session_state.get('last_uploaded_file_id'):
             try:
                 config_data = json.load(uploaded_file)
-                db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas"); db_execute(conn, "DELETE FROM interlinks")
+                db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas")
                 for site in config_data.get('sites', []):
                     encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
                     db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
                 for persona in config_data.get('personas', []):
                     db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
-                for link in config_data.get('interlinks', []):
-                    db_execute(conn, "INSERT INTO interlinks (keyword, keyword_variations, url, source_post_id, source_site_id, type) VALUES (?, ?, ?, ?, ?, ?)",
-                               (link['keyword'], link['keyword_variations'], link['url'], link.get('source_post_id'), link.get('source_site_id'), link['type']))
                 st.session_state.last_uploaded_file_id = uploaded_file.file_id
-                st.success(f"Pomyślnie załadowano konfigurację!")
+                st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person!")
                 st.rerun()
             except Exception as e:
                 st.error(f"Błąd podczas przetwarzania pliku: {e}")
     
     sites_for_export = db_execute(conn, "SELECT name, url, username, app_password FROM sites", fetch="all")
     personas_for_export = db_execute(conn, "SELECT name, description FROM personas", fetch="all")
-    interlinks_for_export = db_execute(conn, "SELECT keyword, keyword_variations, url, source_post_id, source_site_id, type FROM interlinks", fetch="all")
-    if sites_for_export or personas_for_export or interlinks_for_export:
-        export_data = {'sites': [], 'personas': [], 'interlinks': []}
+    if sites_for_export or personas_for_export:
+        export_data = {'sites': [], 'personas': []}
         for name, url, username, encrypted_pass_bytes in sites_for_export:
             encrypted_pass_b64 = base64.b64encode(encrypted_pass_bytes).decode('utf-8')
             export_data['sites'].append({'name': name, 'url': url, 'username': username, 'app_password_b64': encrypted_pass_b64})
         for name, description in personas_for_export:
             export_data['personas'].append({'name': name, 'description': description})
-        for kw, vars, url, p_id, s_id, type in interlinks_for_export:
-            export_data['interlinks'].append({'keyword': kw, 'keyword_variations': vars, 'url': url, 'source_post_id': p_id, 'source_site_id': s_id, 'type': type})
         st.download_button(label="Pobierz konfigurację", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
 
-# --- WYŚWIETLANIE WYBRANEJ ZAKŁADKI ---
+# --- GŁÓWNA LOGIKA WYŚWIETLANIA STRON ---
 
 if st.session_state.menu_choice == "Zarządzanie Stronami":
-    st.header("Zarządzanie Stronami")
-    st.info("W tej sekcji możesz dodać lub usunąć strony WordPress z bieżącej sesji. Pamiętaj, aby zapisać zmiany do pliku konfiguracyjnego w panelu bocznym.")
+    st.header("Zarządzanie Stronami i Konfiguracją")
+    st.info("To jest Twój punkt startowy. Załaduj zapisaną konfigurację w panelu bocznym lub dodaj swoje strony WordPress poniżej.")
     st.subheader("Dodaj nową stronę")
     with st.form("add_site_form", clear_on_submit=True):
         name = st.text_input("Przyjazna nazwa strony")
@@ -524,36 +488,14 @@ elif st.session_state.menu_choice == "Zarządzanie Personami":
                     st.success(f"Persona '{name}' usunięta! Pamiętaj, aby zapisać konfigurację.")
                     st.rerun()
 
-elif st.session_state.menu_choice == "Biblioteka Linkowania":
-    st.header("🔗 Biblioteka Linkowania")
-    st.info("Zarządzaj linkami, które będą automatycznie wstawiane do nowych artykułów. Linki typu 'Auto' są dodawane automatycznie po każdej udanej publikacji.")
-    with st.expander("Dodaj nowy link ręcznie"):
-        with st.form("add_link_form", clear_on_submit=True):
-            keyword = st.text_input("Słowo kluczowe (anchor text)")
-            url = st.text_input("Docelowy URL")
-            submitted = st.form_submit_button("Zapisz link")
-            if submitted and keyword and url:
-                try:
-                    db_execute(conn, "INSERT INTO interlinks (keyword, url, type) VALUES (?, ?, ?)", (keyword, url, 'manual'))
-                    st.success("Link dodany ręcznie!")
-                except sqlite3.IntegrityError:
-                    st.error("Link z takim słowem kluczowym już istnieje.")
-    st.subheader("Zapisane linki")
-    links_data = db_execute(conn, "SELECT id, keyword, url, type FROM interlinks", fetch="all")
-    if not links_data:
-        st.info("Biblioteka jest pusta. Opublikuj artykuły z włączoną opcją 'Dodaj do biblioteki' lub dodaj link ręcznie.")
-    else:
-        df_links = pd.DataFrame(links_data, columns=['ID', 'Słowo kluczowe', 'URL', 'Typ'])
-        st.dataframe(df_links, hide_index=True)
-
 elif st.session_state.menu_choice == "Harmonogram Publikacji":
     st.header("Harmonogram Publikacji")
     st.info("Krok 3: Wybierz artykuły, ustawienia publikacji i zaplanuj je z rozłożeniem w czasie.")
     if not st.session_state.generated_articles:
         st.warning("Brak wygenerowanych artykułów. Przejdź do 'Generator Briefów', a następnie 'Generowanie Treści'.")
     else:
-        sites = db_execute(conn, "SELECT id, name FROM sites", fetch="all")
-        site_options = {name: site_id for site_id, name in sites}
+        sites = db_execute(conn, "SELECT id, name, url, username, app_password FROM sites", fetch="all")
+        site_options = {site[1]: site for site in sites}
         if not site_options: st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
         else:
             df = pd.DataFrame(st.session_state.generated_articles)
@@ -563,18 +505,24 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                 edited_df = st.data_editor(df[['Zaznacz', 'title', 'meta_title', 'meta_description']], hide_index=True, use_container_width=True,
                                            column_config={"title": "Tytuł Artykułu", "meta_title": "Meta Tytuł", "meta_description": "Meta Opis"})
                 st.subheader("2. Ustawienia publikacji")
-                selected_sites_names = st.multiselect("Wybierz strony docelowe", options=site_options.keys())
-                categories_str = st.text_input("Kategorie (wspólne dla wszystkich, oddzielone przecinkami)")
+                col_pub1, col_pub2 = st.columns(2)
+                selected_sites_names = col_pub1.multiselect("Wybierz strony docelowe", options=site_options.keys())
+                author_id = col_pub2.number_input("ID Autora (opcjonalnie)", min_value=1, step=1, help="Jeśli puste, użyty zostanie autor z danych logowania.")
+                
+                # Dynamiczne kategorie
+                category_source_site = st.selectbox("Pobierz kategorie ze strony:", options=site_options.keys())
+                if category_source_site:
+                    source_site_data = site_options[category_source_site]
+                    source_api = WordPressAPI(source_site_data[2], source_site_data[3], decrypt_data(source_site_data[4]))
+                    available_categories = source_api.get_categories()
+                    selected_categories = st.multiselect("Wybierz kategorie", options=available_categories.keys())
+                
                 tags_str = st.text_input("Tagi (wspólne dla wszystkich, oddzielone przecinkami)")
                 featured_image_url = st.text_input("URL obrazka wyróżniającego (wspólny dla wszystkich)")
                 
-                st.subheader("3. Ustawienia Linkowania")
-                enable_interlinking = st.checkbox("Włącz automatyczne linkowanie dla tej publikacji", value=True)
-                add_to_library = st.checkbox("Dodaj opublikowane artykuły do biblioteki linkowania", value=True)
-
-                st.subheader("4. Planowanie w czasie (Staggering)")
+                st.subheader("3. Planowanie w czasie (Staggering)")
                 col_date1, col_date2, col_date3 = st.columns(3)
-                start_date = col_date1.date_input("Data publikacji pierwszego artykułu", min_value=datetime.now())
+                start_date = col_date1.date_input("Data publikacji pierwszego artykułu")
                 start_time = col_date2.time_input("Godzina publikacji pierwszego artykułu")
                 interval_hours = col_date3.number_input("Odstęp między publikacjami (w godzinach)", min_value=1, value=8)
                 
@@ -585,55 +533,31 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                         st.error("Zaznacz przynajmniej jeden artykuł i jedną stronę docelową.")
                     else:
                         current_publish_time = datetime.combine(start_date, start_time)
-                        links_library = db_execute(conn, "SELECT keyword, keyword_variations, url FROM interlinks", fetch="all")
-                        links_library_dicts = [{'keyword': r[0], 'keyword_variations': r[1], 'url': r[2]} for r in links_library]
-
                         with st.spinner("Planowanie publikacji..."):
                             for index, row in selected_articles.iterrows():
                                 full_article_data = st.session_state.generated_articles[index]
-                                content_to_publish = full_article_data['content']
-                                
-                                if enable_interlinking:
-                                    st.info(f"Stosowanie linkowania wewnętrznego dla: '{row['title']}'...")
-                                    content_to_publish = apply_interlinking(content_to_publish, links_library_dicts)
-
                                 for site_name in selected_sites_names:
-                                    site_id = site_options[site_name]
-                                    site_info = db_execute(conn, "SELECT url, username, app_password FROM sites WHERE id = ?", (site_id,), fetch="one")
-                                    url, username, encrypted_pass = site_info
+                                    site_id = site_options[site_name][0]
+                                    site_info = site_options[site_name]
+                                    url, username, encrypted_pass = site_info[2], site_info[3], site_info[4]
                                     password = decrypt_data(encrypted_pass)
                                     api = WordPressAPI(url, username, password)
-                                    available_categories = api.get_categories()
-                                    target_category_ids = []
-                                    if categories_str:
-                                        input_categories = [cat.strip() for cat in categories_str.split(',')]
-                                        for cat_name in input_categories:
-                                            if cat_name in available_categories: target_category_ids.append(available_categories[cat_name])
-                                            else: st.warning(f"Na stronie '{site_name}' nie znaleziono kategorii '{cat_name}'.")
+                                    
+                                    # Dopasowywanie kategorii po nazwie dla każdej strony
+                                    site_categories = api.get_categories()
+                                    target_category_ids = [site_categories[name] for name in selected_categories if name in site_categories]
+                                    
                                     target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
                                     
                                     st.info(f"Planowanie '{row['title']}' na {site_name} na dzień {current_publish_time.strftime('%Y-%m-%d %H:%M')}...")
-                                    success, message, new_post_url = api.publish_post(
-                                        row['title'], content_to_publish, "future", current_publish_time.isoformat(),
-                                        target_category_ids, target_tags, featured_image_url=featured_image_url,
+                                    success, message, _ = api.publish_post(
+                                        row['title'], full_article_data['content'], "future", current_publish_time.isoformat(),
+                                        target_category_ids, target_tags, author_id=int(author_id) if author_id else None,
+                                        featured_image_url=featured_image_url,
                                         meta_title=row['meta_title'], meta_description=row['meta_description']
                                     )
-                                    if success:
-                                        st.success(f"[{site_name}]: {message}")
-                                        if add_to_library and new_post_url:
-                                            st.info(f"Dodawanie do biblioteki linkowania: {new_post_url}")
-                                            brief_data = st.session_state.generated_briefs[index]['brief']
-                                            keywords_from_brief = brief_data.get('slowa_kluczowe', [])
-                                            if keywords_from_brief:
-                                                variations = generate_keyword_variations_gpt5(api_key, keywords_from_brief)
-                                                for kw, vars_list in variations.items():
-                                                    try:
-                                                        db_execute(conn, "INSERT INTO interlinks (keyword, keyword_variations, url, source_site_id, type) VALUES (?, ?, ?, ?, ?)",
-                                                                   (kw, json.dumps(vars_list), new_post_url, site_id, 'auto'))
-                                                    except sqlite3.IntegrityError:
-                                                        pass # Ignoruj, jeśli słowo kluczowe już istnieje
-                                    else:
-                                        st.error(f"[{site_name}]: {message}")
+                                    if success: st.success(f"[{site_name}]: {message}")
+                                    else: st.error(f"[{site_name}]: {message}")
                                 current_publish_time += timedelta(hours=interval_hours)
                         st.success("Zakończono planowanie wszystkich zaznaczonych artykułów!")
 
