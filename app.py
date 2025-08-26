@@ -109,7 +109,7 @@ class WordPressAPI:
             author_map = {}
             for author_id in author_ids:
                 user_data = self._make_request(f"users/{author_id}", display_error=False)
-                if user_data:  # NAPRAWA BŁĘDU: Sprawdź, czy user_data nie jest None
+                if user_data:
                     author_map[author_id] = user_data.get('name', 'N/A')
             category_ids = {cid for p in posts_data for cid in p['categories']}
             category_map = {cat['id']: cat['name'] for cat in self._make_request("categories", params={"include": ",".join(map(str, category_ids))}) or []}
@@ -177,7 +177,7 @@ Kluczowe zagadnienia do poruszenia:
 
 # STYL I TON
 - **Doświadczenie (Experience):** Wplataj w treść zwroty wskazujące na osobiste doświadczenie, np. "Z mojego doświadczenia...", "Częstym błędem, który obserwuję, jest...".
-- **Ekspertyza (Expertise):** Używaj precyzcynej terminologii.
+- **Ekspertyza (Expertise):** Używaj precyzyjnej terminologii.
 - **Autorytatywność (Authoritativeness):** Pisz w sposób pewny i zdecydowany.
 - **Zaufanie (Trustworthiness):** Bądź transparentny. Jeśli produkt lub metoda ma wady, wspomnij o nich.
 
@@ -256,18 +256,19 @@ st.caption("Centralne zarządzanie i generowanie treści dla Twojej sieci blogó
 
 conn = get_db_connection()
 
-if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Dashboard"
-def set_menu_choice(choice): st.session_state.menu_choice = choice
-
-menu_options = ["Dashboard", "Generator Briefów", "Generowanie Treści", "Zarządzanie Personami", "Harmonogram Publikacji", "Zarządzanie Treścią", "Zarządzanie Stronami"]
-st.sidebar.selectbox("Menu", menu_options, key='menu_choice_selector', index=menu_options.index(st.session_state.menu_choice), on_change=lambda: set_menu_choice(st.session_state.menu_choice_selector))
-
+if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Zarządzanie Stronami"
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
 
+# --- NAWIGACJA W PANELU BOCZNYM ---
+st.sidebar.header("Menu Główne")
+menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "Dashboard"]
+st.session_state.menu_choice = st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_radio', label_visibility="collapsed")
+
+# --- ZARZĄDZANIE KLUCZAMI I KONFIGURACJĄ W PANELU BOCZNYM ---
 st.sidebar.header("Konfiguracja API")
 MODEL_API_MAP = {"gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")}
-active_model_for_articles = st.session_state.get('selected_model_for_articles', "gpt-5-nano") # ZMIANA DOMYŚLNEGO MODELU
+active_model_for_articles = st.session_state.get('selected_model_for_articles', "gpt-5-nano")
 active_model_for_briefs = "gpt-5-nano"
 active_model = active_model_for_briefs if st.session_state.menu_choice == "Generator Briefów" else active_model_for_articles
 api_key_name, api_key_label = MODEL_API_MAP[active_model]
@@ -276,20 +277,23 @@ if not api_key:
     api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}.")
 
 with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
-    uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json")
+    uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
     if uploaded_file is not None:
-        try:
-            config_data = json.load(uploaded_file)
-            db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas")
-            for site in config_data.get('sites', []):
-                encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
-                db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
-            for persona in config_data.get('personas', []):
-                db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
-            st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Błąd podczas przetwarzania pliku: {e}")
+        # NAPRAWA BŁĘDU ZAPĘTLENIA
+        if uploaded_file.id != st.session_state.get('last_uploaded_file_id'):
+            try:
+                config_data = json.load(uploaded_file)
+                db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas")
+                for site in config_data.get('sites', []):
+                    encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
+                    db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
+                for persona in config_data.get('personas', []):
+                    db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
+                st.session_state.last_uploaded_file_id = uploaded_file.id
+                st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Błąd podczas przetwarzania pliku: {e}")
     
     sites_for_export = db_execute(conn, "SELECT name, url, username, app_password FROM sites", fetch="all")
     personas_for_export = db_execute(conn, "SELECT name, description FROM personas", fetch="all")
@@ -301,6 +305,8 @@ with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
         for name, description in personas_for_export:
             export_data['personas'].append({'name': name, 'description': description})
         st.download_button(label="Pobierz konfigurację", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
+
+# --- WYŚWIETLANIE WYBRANEJ ZAKŁADKI ---
 
 if st.session_state.menu_choice == "Dashboard":
     st.header("Dashboard")
@@ -373,7 +379,7 @@ elif st.session_state.menu_choice == "Generowanie Treści":
         else:
             col1, col2 = st.columns(2)
             selected_persona_name = col1.selectbox("Wybierz Personę autora", options=list(persona_map.keys()))
-            selected_model = col2.selectbox("Wybierz model do generowania artykułów", options=list(MODEL_API_MAP.keys()), key='selected_model_for_articles')
+            selected_model = col2.selectbox("Wybierz model do generowania artykułów", options=list(MODEL_API_MAP.keys()), key='selected_model_for_articles', index=2) # Domyślnie GPT-5 Nano
             if MODEL_API_MAP[selected_model][0] != api_key_name: st.warning(f"Wybrany model wymaga klucza {MODEL_API_MAP[selected_model][1]}. Upewnij się, że jest aktywny i wpisany w panelu bocznym.")
             if not api_key: st.error(f"Wprowadź swój {api_key_label} w panelu bocznym.")
             else:
@@ -458,7 +464,7 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
         if not site_options: st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
         else:
             df = pd.DataFrame(st.session_state.generated_articles)
-            df['Zaznacz'] = False
+            df['Zaznacz'] = True
             with st.form("bulk_schedule_form"):
                 st.subheader("1. Wybierz artykuły do publikacji")
                 edited_df = st.data_editor(df[['Zaznacz', 'title', 'meta_title', 'meta_description']], hide_index=True, use_container_width=True,
@@ -507,7 +513,6 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                                     )
                                     if success: st.success(f"[{site_name}]: {message}")
                                     else: st.error(f"[{site_name}]: {message}")
-                                # Po zaplanowaniu artykułu na wszystkich stronach, zwiększ czas dla następnego
                                 current_publish_time += timedelta(hours=interval_hours)
                         st.success("Zakończono planowanie wszystkich zaznaczonych artykułów!")
 
@@ -569,7 +574,6 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
 elif st.session_state.menu_choice == "Zarządzanie Stronami":
     st.header("Zarządzanie Stronami")
     st.info("W tej sekcji możesz dodać lub usunąć strony WordPress z bieżącej sesji. Pamiętaj, aby zapisać zmiany do pliku konfiguracyjnego w panelu bocznym.")
-    
     st.subheader("Dodaj nową stronę")
     with st.form("add_site_form", clear_on_submit=True):
         name = st.text_input("Przyjazna nazwa strony")
@@ -590,7 +594,6 @@ elif st.session_state.menu_choice == "Zarządzanie Stronami":
                         st.success(f"Strona '{name}' dodana! Pamiętaj, aby zapisać konfigurację do pliku.")
                     except sqlite3.IntegrityError: st.error(f"Strona o URL '{url}' już istnieje w bazie.")
                 else: st.error(f"Nie udało się dodać strony. Błąd: {message}")
-    
     st.subheader("Lista załadowanych stron")
     sites = db_execute(conn, "SELECT id, name, url, username FROM sites", fetch="all")
     if not sites: st.info("Brak załadowanych stron.")
