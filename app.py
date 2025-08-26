@@ -260,12 +260,10 @@ if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Zarzą
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
 
-# --- NAWIGACJA W PANELU BOCZNYM ---
 st.sidebar.header("Menu Główne")
 menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "Dashboard"]
 st.session_state.menu_choice = st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_radio', label_visibility="collapsed")
 
-# --- ZARZĄDZANIE KLUCZAMI I KONFIGURACJĄ W PANELU BOCZNYM ---
 st.sidebar.header("Konfiguracja API")
 MODEL_API_MAP = {"gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")}
 active_model_for_articles = st.session_state.get('selected_model_for_articles', "gpt-5-nano")
@@ -276,43 +274,83 @@ api_key = st.secrets.get(api_key_name)
 if not api_key:
     api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}.")
 
-with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
-    uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
-    if uploaded_file is not None:
-        # NAPRAWA BŁĘDU ZAPĘTLENIA
-        if uploaded_file.id != st.session_state.get('last_uploaded_file_id'):
-            try:
-                config_data = json.load(uploaded_file)
-                db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas")
-                for site in config_data.get('sites', []):
-                    encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
-                    db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
-                for persona in config_data.get('personas', []):
-                    db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
-                st.session_state.last_uploaded_file_id = uploaded_file.id
-                st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Błąd podczas przetwarzania pliku: {e}")
+# --- GŁÓWNA LOGIKA WYŚWIETLANIA STRON ---
+
+if st.session_state.menu_choice == "Zarządzanie Stronami":
+    st.header("Zarządzanie Stronami i Konfiguracją")
+    st.info("To jest Twój punkt startowy. Załaduj zapisaną konfigurację lub dodaj swoje strony WordPress.")
     
-    sites_for_export = db_execute(conn, "SELECT name, url, username, app_password FROM sites", fetch="all")
-    personas_for_export = db_execute(conn, "SELECT name, description FROM personas", fetch="all")
-    if sites_for_export or personas_for_export:
-        export_data = {'sites': [], 'personas': []}
-        for name, url, username, encrypted_pass_bytes in sites_for_export:
-            encrypted_pass_b64 = base64.b64encode(encrypted_pass_bytes).decode('utf-8')
-            export_data['sites'].append({'name': name, 'url': url, 'username': username, 'app_password_b64': encrypted_pass_b64})
-        for name, description in personas_for_export:
-            export_data['personas'].append({'name': name, 'description': description})
-        st.download_button(label="Pobierz konfigurację", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
+    st.subheader("1. Załaduj lub Zapisz Konfigurację")
+    col1, col2 = st.columns(2)
+    with col1:
+        uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny (`pbn_config.json`)", type="json", key="config_uploader")
+        if uploaded_file is not None:
+            if uploaded_file.file_id != st.session_state.get('last_uploaded_file_id'):
+                try:
+                    config_data = json.load(uploaded_file)
+                    db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas")
+                    for site in config_data.get('sites', []):
+                        encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
+                        db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
+                    for persona in config_data.get('personas', []):
+                        db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
+                    st.session_state.last_uploaded_file_id = uploaded_file.file_id
+                    st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Błąd podczas przetwarzania pliku: {e}")
+    with col2:
+        sites_for_export = db_execute(conn, "SELECT name, url, username, app_password FROM sites", fetch="all")
+        personas_for_export = db_execute(conn, "SELECT name, description FROM personas", fetch="all")
+        if sites_for_export or personas_for_export:
+            export_data = {'sites': [], 'personas': []}
+            for name, url, username, encrypted_pass_bytes in sites_for_export:
+                encrypted_pass_b64 = base64.b64encode(encrypted_pass_bytes).decode('utf-8')
+                export_data['sites'].append({'name': name, 'url': url, 'username': username, 'app_password_b64': encrypted_pass_b64})
+            for name, description in personas_for_export:
+                export_data['personas'].append({'name': name, 'description': description})
+            st.download_button(label="Pobierz konfigurację do pliku", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
+    
+    st.divider()
+    st.subheader("2. Dodaj nową stronę")
+    with st.form("add_site_form", clear_on_submit=True):
+        name = st.text_input("Przyjazna nazwa strony")
+        url = st.text_input("URL strony", placeholder="https://twojastrona.pl")
+        username = st.text_input("Login WordPress")
+        app_password = st.text_input("Hasło Aplikacji", type="password")
+        submitted = st.form_submit_button("Testuj połączenie i Zapisz")
+        if submitted:
+            if not all([name, url, username, app_password]): st.error("Wszystkie pola są wymagane!")
+            else:
+                with st.spinner("Testowanie połączenia..."):
+                    api = WordPressAPI(url, username, app_password)
+                    success, message = api.test_connection()
+                if success:
+                    encrypted_password = encrypt_data(app_password)
+                    try:
+                        db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (name, url, username, encrypted_password))
+                        st.success(f"Strona '{name}' dodana! Pamiętaj, aby zapisać konfigurację do pliku.")
+                    except sqlite3.IntegrityError: st.error(f"Strona o URL '{url}' już istnieje w bazie.")
+                else: st.error(f"Nie udało się dodać strony. Błąd: {message}")
+    
+    st.subheader("3. Lista załadowanych stron")
+    sites = db_execute(conn, "SELECT id, name, url, username FROM sites", fetch="all")
+    if not sites: st.info("Brak załadowanych stron.")
+    else:
+        for site_id, name, url, username in sites:
+            cols = st.columns([0.4, 0.4, 0.2])
+            cols[0].markdown(f"**{name}**\n\n{url}")
+            cols[1].text(f"Login: {username}")
+            if cols[2].button("Usuń", key=f"delete_{site_id}"):
+                db_execute(conn, "DELETE FROM sites WHERE id = ?", (site_id,))
+                st.success(f"Strona '{name}' usunięta! Pamiętaj, aby zapisać nową konfigurację do pliku.")
+                st.rerun()
 
-# --- WYŚWIETLANIE WYBRANEJ ZAKŁADKI ---
-
-if st.session_state.menu_choice == "Dashboard":
+elif st.session_state.menu_choice == "Dashboard":
     st.header("Dashboard")
     sites = db_execute(conn, "SELECT id FROM sites", fetch="all")
     if not sites:
-        st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami' lub załaduj plik konfiguracyjny w panelu bocznym.")
+        st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami' lub załaduj plik konfiguracyjny.")
     else:
         if st.button("Odśwież wszystkie statystyki"): st.cache_data.clear()
         @st.cache_data(ttl=600)
@@ -362,7 +400,7 @@ elif st.session_state.menu_choice == "Generator Briefów":
     if st.session_state.generated_briefs:
         st.subheader("Wygenerowane Briefy")
         if st.button("Przejdź do generowania artykułów z tych briefów"):
-            set_menu_choice("Generowanie Treści")
+            st.session_state.menu_choice = "Generowanie Treści"
             st.rerun()
         for i, item in enumerate(st.session_state.generated_briefs):
             with st.expander(f"**{i+1}. {item['topic']}**"):
@@ -379,7 +417,7 @@ elif st.session_state.menu_choice == "Generowanie Treści":
         else:
             col1, col2 = st.columns(2)
             selected_persona_name = col1.selectbox("Wybierz Personę autora", options=list(persona_map.keys()))
-            selected_model = col2.selectbox("Wybierz model do generowania artykułów", options=list(MODEL_API_MAP.keys()), key='selected_model_for_articles', index=2) # Domyślnie GPT-5 Nano
+            selected_model = col2.selectbox("Wybierz model do generowania artykułów", options=list(MODEL_API_MAP.keys()), key='selected_model_for_articles', index=1)
             if MODEL_API_MAP[selected_model][0] != api_key_name: st.warning(f"Wybrany model wymaga klucza {MODEL_API_MAP[selected_model][1]}. Upewnij się, że jest aktywny i wpisany w panelu bocznym.")
             if not api_key: st.error(f"Wprowadź swój {api_key_label} w panelu bocznym.")
             else:
@@ -420,7 +458,7 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                         completed_count += 1
                                         progress_bar.progress(completed_count / len(tasks_to_run), text=f"Ukończono {completed_count}/{len(tasks_to_run)}...")
                             st.success("Generowanie artykułów zakończone!")
-                            set_menu_choice("Harmonogram Publikacji")
+                            st.session_state.menu_choice = "Harmonogram Publikacji"
                             st.rerun()
 
 elif st.session_state.menu_choice == "Zarządzanie Personami":
@@ -570,39 +608,3 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
                                 st.cache_data.clear()
                 else:
                     st.caption("Zaznacz przynajmniej jeden wpis, aby aktywować panel masowej edycji.")
-
-elif st.session_state.menu_choice == "Zarządzanie Stronami":
-    st.header("Zarządzanie Stronami")
-    st.info("W tej sekcji możesz dodać lub usunąć strony WordPress z bieżącej sesji. Pamiętaj, aby zapisać zmiany do pliku konfiguracyjnego w panelu bocznym.")
-    st.subheader("Dodaj nową stronę")
-    with st.form("add_site_form", clear_on_submit=True):
-        name = st.text_input("Przyjazna nazwa strony")
-        url = st.text_input("URL strony", placeholder="https://twojastrona.pl")
-        username = st.text_input("Login WordPress")
-        app_password = st.text_input("Hasło Aplikacji", type="password")
-        submitted = st.form_submit_button("Testuj połączenie i Zapisz")
-        if submitted:
-            if not all([name, url, username, app_password]): st.error("Wszystkie pola są wymagane!")
-            else:
-                with st.spinner("Testowanie połączenia..."):
-                    api = WordPressAPI(url, username, app_password)
-                    success, message = api.test_connection()
-                if success:
-                    encrypted_password = encrypt_data(app_password)
-                    try:
-                        db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (name, url, username, encrypted_password))
-                        st.success(f"Strona '{name}' dodana! Pamiętaj, aby zapisać konfigurację do pliku.")
-                    except sqlite3.IntegrityError: st.error(f"Strona o URL '{url}' już istnieje w bazie.")
-                else: st.error(f"Nie udało się dodać strony. Błąd: {message}")
-    st.subheader("Lista załadowanych stron")
-    sites = db_execute(conn, "SELECT id, name, url, username FROM sites", fetch="all")
-    if not sites: st.info("Brak załadowanych stron.")
-    else:
-        for site_id, name, url, username in sites:
-            cols = st.columns([0.4, 0.4, 0.2])
-            cols[0].markdown(f"**{name}**\n\n{url}")
-            cols[1].text(f"Login: {username}")
-            if cols[2].button("Usuń", key=f"delete_{site_id}"):
-                db_execute(conn, "DELETE FROM sites WHERE id = ?", (site_id,))
-                st.success(f"Strona '{name}' usunięta! Pamiętaj, aby zapisać nową konfigurację do pliku.")
-                st.rerun()
