@@ -175,7 +175,7 @@ Kluczowe zagadnienia do poruszenia:
 
 # STYL I TON
 - **Doświadczenie (Experience):** Wplataj w treść zwroty wskazujące na osobiste doświadczenie, np. "Z mojego doświadczenia...", "Częstym błędem, który obserwuję, jest...".
-- **Ekspertyza (Expertise):** Używaj precycyzyjnej terminologii.
+- **Ekspertyza (Expertise):** Używaj precyzyjnej terminologii.
 - **Autorytatywność (Authoritativeness):** Pisz w sposób pewny i zdecydowany.
 - **Zaufanie (Trustworthiness):** Bądź transparentny. Jeśli produkt lub metoda ma wady, wspomnij o nich.
 
@@ -241,7 +241,7 @@ def generate_image_gemini(api_key, image_prompt):
         for part in response.candidates[0].content.parts:
             if part.inline_data is not None:
                 return part.inline_data.data
-        st.error("Model nie zwrócił obrazu.")
+        st.error("Model nie zwrócił danych obrazu w odpowiedzi.")
         return None
     except Exception as e:
         st.error(f"Błąd generowania obrazu (gemini-1.5-flash-image-preview): {e}")
@@ -299,12 +299,21 @@ menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Br
 st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice', on_change=lambda: st.session_state.update(menu_choice=st.session_state.menu_choice))
 
 st.sidebar.header("Konfiguracja API")
-openai_api_key = st.secrets.get("OPENAI_API_KEY")
-if not openai_api_key:
-    openai_api_key = st.sidebar.text_input("Klucz OpenAI API", type="password")
-google_api_key = st.secrets.get("GOOGLE_API_KEY")
-if not google_api_key:
-    google_api_key = st.sidebar.text_input("Klucz Google AI API", type="password")
+MODEL_API_MAP = {"gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")}
+active_model_for_articles = st.session_state.get('selected_model_for_articles', "gpt-5-nano")
+active_model_for_briefs = "gpt-5-nano"
+active_model_key = st.session_state.menu_choice
+if active_model_key == "Generator Briefów":
+    active_model = active_model_for_briefs
+elif active_model_key == "Generowanie Treści":
+    active_model = active_model_for_articles
+else:
+    active_model = "gpt-5-nano"
+
+api_key_name, api_key_label = MODEL_API_MAP.get(active_model, (None, None))
+api_key = st.secrets.get(api_key_name) if api_key_name else None
+if not api_key:
+    api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}.")
 
 with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
     uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
