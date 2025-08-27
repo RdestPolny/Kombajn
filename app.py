@@ -190,17 +190,15 @@ Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie sy
 def call_gpt5_nano(api_key, prompt):
     client = openai.OpenAI(api_key=api_key)
     response = client.chat.completions.create(
-        model="gpt-5-nano",  # Używamy nazwy modelu
+        model="gpt-5-nano",
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content
 
 def generate_article_two_parts(api_key, title, prompt):
-    # Krok 1: Generowanie pierwszej połowy
     part1_prompt = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\n{prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu w połowie tekstu."
     part1_text = call_gpt5_nano(api_key, part1_prompt)
 
-    # Krok 2: Generowanie drugiej połowy
     part2_prompt = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nOto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie od miejsca, w którym przerwano. Nie dodawaj wstępów typu 'Oto kontynuacja' ani nie powtarzaj tytułu.\n\nOryginalne wytyczne do artykułu:\n{prompt}\n\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"
     part2_text = call_gpt5_nano(api_key, part2_prompt)
     
@@ -232,15 +230,19 @@ Wygeneruj tylko prompt."""
 
 def generate_image_gemini(api_key, image_prompt):
     try:
-        genai.configure(api_key=api_key)
+        # Konfigurujemy klucz globalnie. genai.Client() znajdzie go w zmiennych środowiskowych.
+        genai.configure(api_key=api_key) 
         client = genai.Client()
+        
         response = client.models.generate_content(
             model="gemini-2.5-flash-image-preview",
-            contents=[image_prompt],
+            contents=[image_prompt], # Przekazujemy tylko tekstowy prompt
         )
+        
         for part in response.candidates[0].content.parts:
             if part.inline_data is not None:
-                return part.inline_data.data
+                return part.inline_data.data # Zwracamy surowe bajty obrazu
+                
         st.error("Model Gemini nie zwrócił danych obrazu w odpowiedzi.")
         return None
     except Exception as e:
@@ -302,7 +304,6 @@ st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice')
 st.sidebar.header("Konfiguracja API")
 st.sidebar.info("Klucze API są pobierane z sekretów Streamlit (`st.secrets`). Możesz je również wprowadzić tymczasowo poniżej.")
 
-# Pobieranie kluczy z sekretów Streamlit z opcją fallback
 openai_api_key = st.secrets.get("OPENAI_API_KEY")
 if not openai_api_key:
     openai_api_key = st.sidebar.text_input("Klucz OpenAI API", type="password")
@@ -577,7 +578,6 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                         current_publish_time = datetime.combine(start_date, start_time)
                         with st.spinner("Planowanie publikacji..."):
                             for index, row in selected_articles.iterrows():
-                                # Upewnij się, że indeks jest prawidłowy
                                 if index < len(st.session_state.generated_articles):
                                     full_article_data = st.session_state.generated_articles[index]
                                     for site_name in selected_sites_names:
@@ -638,7 +638,7 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
                 if not selected_posts.empty:
                     st.subheader(f"Masowa edycja dla {len(selected_posts)} zaznaczonych wpisów")
                     with st.form("bulk_edit_form"):
-                        api = WordPressAPI(url, username, password) # Re-inicjalizacja API do edycji
+                        api = WordPressAPI(url, username, password)
                         new_category_names = st.multiselect("Zastąp kategorie", options=categories.keys())
                         new_author_name = st.selectbox("Zmień autora", options=[None] + sorted(list(final_users_map.keys())))
                         submitted = st.form_submit_button("Wykonaj masową edycję")
