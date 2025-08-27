@@ -13,6 +13,7 @@ import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 import io
+from PIL import Image
 
 # --- KONFIGURACJA I INICJALIZACJA ---
 
@@ -118,19 +119,14 @@ class WordPressAPI:
                 final_posts.append({"id": p['id'], "title": p['title']['rendered'], "date": datetime.fromisoformat(p['date']).strftime('%Y-%m-%d %H:%M'), "author_name": author_map.get(p['author'], 'N/A'), "author_id": p['author'], "categories": ", ".join(filter(None, [category_map.get(cid, '') for cid in p['categories']]))})
             return final_posts
 
-    def upload_image(self, image_url):
+    def upload_image_from_bytes(self, image_bytes, filename):
         try:
-            response = requests.get(image_url, timeout=20)
-            response.raise_for_status()
-            image_bytes = io.BytesIO(response.content)
-            filename = os.path.basename(urlparse(image_url).path)
-            if not filename: filename = "uploaded_image.jpg"
             headers = {'Content-Disposition': f'attachment; filename={filename}'}
-            upload_response = requests.post(f"{self.base_url}/media", headers=headers, files={'file': image_bytes}, auth=self.auth)
+            upload_response = requests.post(f"{self.base_url}/media", headers=headers, data=image_bytes, auth=self.auth)
             upload_response.raise_for_status()
             return upload_response.json().get('id')
         except Exception as e:
-            st.warning(f"Nie udało się wgrać obrazka z URL: {image_url}. Błąd: {e}")
+            st.warning(f"Nie udało się wgrać obrazka z bajtów: {filename}. Błąd: {e}")
             return None
 
     def update_post(self, post_id, data):
@@ -141,12 +137,12 @@ class WordPressAPI:
         except requests.exceptions.HTTPError as e: return False, f"Błąd aktualizacji wpisu ID {post_id} ({e.response.status_code}): {e.response.text}"
         except requests.exceptions.RequestException as e: return False, f"Błąd sieci przy aktualizacji wpisu ID {post_id}: {e}"
 
-    def publish_post(self, title, content, status, publish_date, category_ids, tags, author_id=None, featured_image_url=None, meta_title=None, meta_description=None):
+    def publish_post(self, title, content, status, publish_date, category_ids, tags, author_id=None, featured_image_bytes=None, meta_title=None, meta_description=None):
         post_data = {'title': title, 'content': content, 'status': status, 'date': publish_date, 'categories': category_ids, 'tags': tags}
         if author_id:
             post_data['author'] = int(author_id)
-        if featured_image_url:
-            media_id = self.upload_image(featured_image_url)
+        if featured_image_bytes:
+            media_id = self.upload_image_from_bytes(featured_image_bytes, f"featured-image-{datetime.now().timestamp()}.png")
             if media_id:
                 post_data['featured_media'] = media_id
         if meta_title or meta_description:
@@ -172,7 +168,7 @@ MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
 Artykuł jest skierowany do {{GRUPA_DOCELOWA}}. Używaj języka, który jest dla nich zrozumiały, ale nie unikaj terminologii branżowej – wyjaśniaj ją w prosty sposób.
 
 # STRUKTURA I GŁĘBIA
-**Zasada Odwróconej Piramidy:** Rozpocznij artykuł od razu od konkretnej i zwięzłej odpowiedzi na główne pytanie zawarte w tytule. Pierwszy akapit (lead) musi dostarczać natychmiastowej wartości. Dopiero w dalszej części rozwiń temat szczegółowo.
+**Zasada Odwróconej Piramidy:** Rozpocznij artykuł od razu od konkretnej i zwięzłej odpowiedzi na główne pytanie zawarte w tytule. Pierwszy akapit (lead) musi dostarczać natychmiastowej wartości, ale zacznij zdanie naturalnie nie np. od zdania typu oto odpowiedź na tytuł lub oto kluczowe informacje. Dopiero w dalszej części rozwiń temat szczegółowo.
 Artykuł musi mieć logiczną strukturę. Rozwiń temat w kilku kluczowych sekcjach, a zakończ praktycznym podsumowaniem.
 Kluczowe zagadnienia do poruszenia:
 {{ZAGADNIENIA_KLUCZOWE}}
@@ -188,7 +184,7 @@ Naturalnie wpleć w treść następujące słowa kluczowe: {{SLOWA_KLUCZOWE}}.
 Dodatkowo, wpleć w treść poniższe frazy semantyczne, aby zwiększyć głębię tematyczną: {{DODATKOWE_SLOWA_SEMANTYCZNE}}.
 
 # FORMATOWANIE
-Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym."""
+Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym stosuj pogrubienia ułatwiające czytanie i znalezienie kluczowych informacji."""
 
 def call_gemini(api_key, prompt):
     genai.configure(api_key=api_key)
@@ -220,9 +216,38 @@ def generate_article_dispatcher(model, api_key, title, prompt):
         if model == "gpt-5-nano" and "has no attribute 'responses'" in str(e): return title, "**BŁĄD (GPT-5):** Biblioteka `openai` nie obsługuje jeszcze API `responses`."
         return title, f"**BŁĄD KRYTYCZNY:** {str(e)}"
 
-def generate_single_brief_gpt5(api_key, topic):
+def generate_image_prompt_gpt5(api_key, article_title):
     try:
-        prompt = f"""Jesteś strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na temat: "{topic}".
+        prompt = f"""Jesteś art directorem specjalizującym się w zdjęciach do artykułów blogowych. Twoim zadaniem jest stworzenie krótkiego, ale sugestywnego promptu do generatora obrazów AI (text-to-image).
+Prompt musi opisywać FOTOGRAFICZNY, realistyczny obraz, który wizualnie reprezentuje temat artykułu.
+Zasady:
+- Prompt musi być w języku angielskim.
+- Prompt musi zawierać słowa kluczowe takie jak: "photorealistic", "sharp focus", "soft light".
+- Prompt NIE MOŻE zawierać żadnych słów sugerujących tekst, litery, logotypy, znaki wodne.
+- Prompt powinien być rozległy (3-5 zdań).
+
+Temat artykułu: "{article_title}"
+
+Wygeneruj tylko i wyłącznie prompt, bez żadnych dodatkowych komentarzy."""
+        return call_gpt5_nano(api_key, prompt).strip()
+    except Exception:
+        return f"Photorealistic image representing the topic: {article_title}, sharp focus, soft light, no text, no logos"
+
+def generate_image_gemini(api_key, image_prompt):
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash') # Upewnij się, że ten model obsługuje generowanie obrazów
+        response = model.generate_content(image_prompt, generation_config={"response_mime_type": "image/png"})
+        # Logika wyciągania danych obrazu może się różnić w zależności od API
+        return response.parts[0].inline_data.data
+    except Exception as e:
+        st.error(f"Błąd generowania obrazu: {e}")
+        return None
+
+def generate_brief_and_image(openai_api_key, google_api_key, topic):
+    try:
+        # Krok 1: Generowanie briefu tekstowego
+        brief_prompt = f"""Jesteś strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na temat: "{topic}".
 Brief musi być w formacie JSON i zawierać klucze:
 - "temat_artykulu": Dokładny, angażujący tytuł.
 - "grupa_docelowa": Krótki opis, dla kogo jest artykuł.
@@ -231,10 +256,18 @@ Brief musi być w formacie JSON i zawierać klucze:
 - "dodatkowe_slowa_semantyczne": Array 5-10 fraz i kolokacji semantycznie wspierających główny temat.
 
 Wygeneruj brief JSON dla tematu: "{topic}" """
-        json_string = call_gpt5_nano(api_key, prompt).strip().replace("```json", "").replace("```", "")
-        return topic, json.loads(json_string)
+        json_string = call_gpt5_nano(openai_api_key, brief_prompt).strip().replace("```json", "").replace("```", "")
+        brief_data = json.loads(json_string)
+
+        # Krok 2: Generowanie promptu do obrazu
+        image_prompt = generate_image_prompt_gpt5(openai_api_key, brief_data['temat_artykulu'])
+
+        # Krok 3: Generowanie obrazu
+        image_bytes = generate_image_gemini(google_api_key, image_prompt)
+        
+        return topic, brief_data, image_bytes
     except Exception as e:
-        return topic, {"error": f"Błąd generowania briefu: {str(e)}"}
+        return topic, {"error": f"Błąd generowania briefu: {str(e)}"}, None
 
 def generate_meta_tags_gpt5(api_key, article_title, article_content, keywords):
     try:
@@ -264,17 +297,16 @@ if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs
 
 st.sidebar.header("Menu Główne")
 menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "Dashboard"]
-st.session_state.menu_choice = st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_radio', label_visibility="collapsed")
+st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice', on_change=lambda: st.session_state.update(menu_choice=st.session_state.menu_choice))
 
 st.sidebar.header("Konfiguracja API")
-MODEL_API_MAP = {"gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")}
-active_model_for_articles = st.session_state.get('selected_model_for_articles', "gpt-5-nano")
-active_model_for_briefs = "gpt-5-nano"
-active_model = active_model_for_briefs if st.session_state.menu_choice == "Generator Briefów" else active_model_for_articles
-api_key_name, api_key_label = MODEL_API_MAP[active_model]
-api_key = st.secrets.get(api_key_name)
-if not api_key:
-    api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}.")
+openai_api_key = st.secrets.get("OPENAI_API_KEY")
+if not openai_api_key:
+    openai_api_key = st.sidebar.text_input("Klucz OpenAI API", type="password")
+
+google_api_key = st.secrets.get("GOOGLE_API_KEY")
+if not google_api_key:
+    google_api_key = st.sidebar.text_input("Klucz Google AI API", type="password")
 
 with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
     uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
