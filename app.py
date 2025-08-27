@@ -168,7 +168,7 @@ MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
 Artykuł jest skierowany do {{GRUPA_DOCELOWA}}. Używaj języka, który jest dla nich zrozumiały, ale nie unikaj terminologii branżowej – wyjaśniaj ją w prosty sposób.
 
 # STRUKTURA I GŁĘBIA
-**Zasada Odwróconej Piramidy:** Rozpocznij artykuł od razu od konkretnej i zwięzłej odpowiedzi na główne pytanie zawarte w tytule. Pierwszy akapit (lead) musi dostarczać natychmiastowej wartości, ale zacznij zdanie naturalnie nie np. od zdania typu oto odpowiedź na tytuł lub oto kluczowe informacje. Dopiero w dalszej części rozwiń temat szczegółowo.
+**Zasada Odwróconej Piramidy:** Rozpocznij artykuł od razu od konkretnej i zwięzłej odpowiedzi na główne pytanie zawarte w tytule. Pierwszy akapit (lead) musi dostarczać natychmiastowej wartości. Dopiero w dalszej części rozwiń temat szczegółowo.
 Artykuł musi mieć logiczną strukturę. Rozwiń temat w kilku kluczowych sekcjach, a zakończ praktycznym podsumowaniem.
 Kluczowe zagadnienia do poruszenia:
 {{ZAGADNIENIA_KLUCZOWE}}
@@ -184,7 +184,7 @@ Naturalnie wpleć w treść następujące słowa kluczowe: {{SLOWA_KLUCZOWE}}.
 Dodatkowo, wpleć w treść poniższe frazy semantyczne, aby zwiększyć głębię tematyczną: {{DODATKOWE_SLOWA_SEMANTYCZNE}}.
 
 # FORMATOWANIE
-Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym stosuj pogrubienia ułatwiające czytanie i znalezienie kluczowych informacji."""
+Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym."""
 
 def call_gemini(api_key, prompt):
     genai.configure(api_key=api_key)
@@ -218,13 +218,13 @@ def generate_article_dispatcher(model, api_key, title, prompt):
 
 def generate_image_prompt_gpt5(api_key, article_title):
     try:
-        prompt = f"""Jesteś art directorem specjalizującym się w zdjęciach do artykułów blogowych. Twoim zadaniem jest stworzenie krótkiego, ale sugestywnego promptu do generatora obrazów AI (text-to-image).
+        prompt = f"""Jesteś art directorem specjalizującym się w obrazach do artykułów blogowych. Twoim zadaniem jest stworzenie krótkiego, ale sugestywnego promptu do generatora obrazów AI (text-to-image).
 Prompt musi opisywać FOTOGRAFICZNY, realistyczny obraz, który wizualnie reprezentuje temat artykułu.
 Zasady:
 - Prompt musi być w języku angielskim.
 - Prompt musi zawierać słowa kluczowe takie jak: "photorealistic", "sharp focus", "soft light".
 - Prompt NIE MOŻE zawierać żadnych słów sugerujących tekst, litery, logotypy, znaki wodne.
-- Prompt powinien być rozległy (3-5 zdań).
+- Prompt powinien być zwięzły (1-2 zdania).
 
 Temat artykułu: "{article_title}"
 
@@ -336,6 +336,21 @@ with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
         for name, description in personas_for_export:
             export_data['personas'].append({'name': name, 'description': description})
         st.download_button(label="Pobierz konfigurację", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
+
+# --- GŁÓWNA LOGIKA WYŚWIETLANIA STRON ---
+if st.session_state.menu_choice == "Zarządzanie Stronami":
+    # ... (kod bez zmian)
+    pass
+# ... (reszta kodu dla innych zakładek)
+120.4s
+Model response
+ThinkingThoughts
+(experimental)
+Auto
+Expand to view model thoughts
+
+chevron_right
+
 
 # --- GŁÓWNA LOGIKA WYŚWIETLANIA STRON ---
 
