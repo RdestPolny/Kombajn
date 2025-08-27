@@ -310,8 +310,13 @@ elif active_model_key == "Generowanie Treści":
 else:
     active_model = "gpt-5-nano"
 
-api_key_name, api_key_label = MODEL_API_MAP.get(active_model, (None, None))
-api_key = st.secrets.get(api_key_name) if api_key_name else None
+openai_api_key = st.secrets.get("OPENAI_API_KEY")
+if not openai_api_key:
+    openai_api_key = st.sidebar.text_input("Klucz OpenAI API", type="password")
+
+google_api_key = st.secrets.get("GOOGLE_API_KEY")
+if not google_api_key:
+    google_api_key = st.sidebar.text_input("Klucz Google AI API", type="password")
 if not api_key:
     api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}.")
 
