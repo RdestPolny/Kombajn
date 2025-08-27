@@ -233,11 +233,18 @@ Wygeneruj tylko prompt."""
 def generate_image_gemini(api_key, image_prompt):
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(image_prompt, generation_config={"response_mime_type": "image/png"})
-        return response.parts[0].inline_data.data
+        client = genai.Client()
+        response = client.models.generate_content(
+            model="gemini-1.5-flash-image-preview", # Zgodnie z Twoją prośbą
+            contents=[image_prompt],
+        )
+        for part in response.candidates[0].content.parts:
+            if part.inline_data is not None:
+                return part.inline_data.data
+        st.error("Model nie zwrócił obrazu.")
+        return None
     except Exception as e:
-        st.error(f"Błąd generowania obrazu: {e}")
+        st.error(f"Błąd generowania obrazu (gemini-1.5-flash-image-preview): {e}")
         return None
 
 def generate_brief_and_image(openai_api_key, google_api_key, topic):
@@ -289,7 +296,7 @@ if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs
 
 st.sidebar.header("Menu Główne")
 menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "Dashboard"]
-st.session_state.menu_choice = st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_radio', label_visibility="collapsed")
+st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice', on_change=lambda: st.session_state.update(menu_choice=st.session_state.menu_choice))
 
 st.sidebar.header("Konfiguracja API")
 MODEL_API_MAP = {"gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")}
