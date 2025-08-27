@@ -17,6 +17,7 @@ from PIL import Image
 
 # --- KONFIGURACJA I INICJALIZACJA ---
 
+# Klucz do szyfrowania jest generowany na podstawie seeda. Ważne, aby był stały.
 SECRET_KEY_SEED = "twoj-bardzo-dlugi-i-tajny-klucz-do-szyfrowania-konfiguracji"
 KEY = base64.urlsafe_b64encode(SECRET_KEY_SEED.encode().ljust(32)[:32])
 FERNET = Fernet(KEY)
@@ -186,35 +187,33 @@ Dodatkowo, wpleć w treść poniższe frazy semantyczne, aby zwiększyć głębi
 # FORMATOWANIE
 Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym. Używaj pogrubień (<b> lub <strong>), aby wyróżnić kluczowe terminy i najważniejsze informacje, co ułatwia skanowanie tekstu. Jeśli dane można przedstawić w formie porównania lub kroków, rozważ użycie prostej tabeli (<table>) dla lepszej czytelności."""
 
-def call_gemini(api_key, prompt):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    return model.generate_content(prompt).text
-
-def call_gpt4o_mini(api_key, prompt):
-    client = openai.OpenAI(api_key=api_key)
-    response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
-    return response.choices[0].message.content
-
 def call_gpt5_nano(api_key, prompt):
     client = openai.OpenAI(api_key=api_key)
-    response = client.responses.create(model="gpt-5-nano", input=[{"role": "user", "content": prompt}])
-    return response.output_text
+    response = client.chat.completions.create(
+        model="gpt-5-nano",  # Używamy nazwy modelu
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content
 
-def generate_article_two_parts(model_function, api_key, title, prompt):
-    part1_text = model_function(api_key, f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\n{prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu.")
-    part2_text = model_function(api_key, f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nOto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie. Nie dodawaj wstępów typu 'Oto kontynuacja'.\nOryginalne wytyczne: {prompt}\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}")
+def generate_article_two_parts(api_key, title, prompt):
+    # Krok 1: Generowanie pierwszej połowy
+    part1_prompt = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\n{prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu w połowie tekstu."
+    part1_text = call_gpt5_nano(api_key, part1_prompt)
+
+    # Krok 2: Generowanie drugiej połowy
+    part2_prompt = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nOto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie od miejsca, w którym przerwano. Nie dodawaj wstępów typu 'Oto kontynuacja' ani nie powtarzaj tytułu.\n\nOryginalne wytyczne do artykułu:\n{prompt}\n\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"
+    part2_text = call_gpt5_nano(api_key, part2_prompt)
+    
     return title, part1_text.strip() + "\n\n" + part2_text.strip()
 
 def generate_article_dispatcher(model, api_key, title, prompt):
     try:
-        if model == "gemini-1.5-flash": return generate_article_two_parts(lambda k, p: call_gemini(k, p), api_key, title, prompt)
-        elif model == "gpt-4o-mini": return generate_article_two_parts(lambda k, p: call_gpt4o_mini(k, p), api_key, title, prompt)
-        elif model == "gpt-5-nano": return generate_article_two_parts(lambda k, p: call_gpt5_nano(k, p), api_key, title, prompt)
-        else: return title, f"**BŁĄD: Nieznany model '{model}'**"
+        if model == "gpt-5-nano":
+            return generate_article_two_parts(api_key, title, prompt)
+        else:
+            return title, f"**BŁĄD: Nieobsługiwany model '{model}'**"
     except Exception as e:
-        if model == "gpt-5-nano" and "has no attribute 'responses'" in str(e): return title, "**BŁĄD (GPT-5):** Biblioteka `openai` nie obsługuje jeszcze API `responses`."
-        return title, f"**BŁĄD KRYTYCZNY:** {str(e)}"
+        return title, f"**BŁĄD KRYTYCZNY podczas generowania artykułu:** {str(e)}"
 
 def generate_image_prompt_gpt5(api_key, article_title):
     try:
@@ -227,7 +226,8 @@ def generate_image_prompt_gpt5(api_key, article_title):
 Temat artykułu: "{article_title}"
 Wygeneruj tylko prompt."""
         return call_gpt5_nano(api_key, prompt).strip()
-    except Exception:
+    except Exception as e:
+        st.warning(f"Błąd generowania promptu do obrazka przez GPT-5: {e}. Używam promptu zapasowego.")
         return f"Photorealistic image representing the topic: {article_title}, sharp focus, soft light, no text, no logos"
 
 def generate_image_gemini(api_key, image_prompt):
@@ -235,16 +235,16 @@ def generate_image_gemini(api_key, image_prompt):
         genai.configure(api_key=api_key)
         client = genai.Client()
         response = client.models.generate_content(
-            model="gemini-1.5-flash-image-preview",
+            model="gemini-2.5-flash-image-preview",
             contents=[image_prompt],
         )
         for part in response.candidates[0].content.parts:
             if part.inline_data is not None:
                 return part.inline_data.data
-        st.error("Model nie zwrócił danych obrazu w odpowiedzi.")
+        st.error("Model Gemini nie zwrócił danych obrazu w odpowiedzi.")
         return None
     except Exception as e:
-        st.error(f"Błąd generowania obrazu (gemini-1.5-flash-image-preview): {e}")
+        st.error(f"Błąd generowania obrazu (gemini-2.5-flash-image-preview): {e}")
         return None
 
 def generate_brief_and_image(openai_api_key, google_api_key, topic):
@@ -279,7 +279,8 @@ Treść artykułu (fragment):
 Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (max 60 znaków, angażujący, z główną frazą na początku) i "meta_description" (max 155 znaków, zachęcający do kliknięcia, z call-to-action i słowami kluczowymi)."""
         json_string = call_gpt5_nano(api_key, prompt).strip().replace("```json", "").replace("```", "")
         return json.loads(json_string)
-    except Exception:
+    except Exception as e:
+        st.warning(f"Błąd generowania meta tagów: {e}. Używam wartości domyślnych.")
         return {"meta_title": article_title, "meta_description": ""}
 
 # --- INTERFEJS UŻYTKOWNIKA (STREAMLIT) ---
@@ -296,20 +297,12 @@ if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs
 
 st.sidebar.header("Menu Główne")
 menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "Dashboard"]
-st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice', on_change=lambda: st.session_state.update(menu_choice=st.session_state.menu_choice))
+st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice')
 
 st.sidebar.header("Konfiguracja API")
-MODEL_API_MAP = {"gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")}
-active_model_for_articles = st.session_state.get('selected_model_for_articles', "gpt-5-nano")
-active_model_for_briefs = "gpt-5-nano"
-active_model_key = st.session_state.menu_choice
-if active_model_key == "Generator Briefów":
-    active_model = active_model_for_briefs
-elif active_model_key == "Generowanie Treści":
-    active_model = active_model_for_articles
-else:
-    active_model = "gpt-5-nano"
+st.sidebar.info("Klucze API są pobierane z sekretów Streamlit (`st.secrets`). Możesz je również wprowadzić tymczasowo poniżej.")
 
+# Pobieranie kluczy z sekretów Streamlit z opcją fallback
 openai_api_key = st.secrets.get("OPENAI_API_KEY")
 if not openai_api_key:
     openai_api_key = st.sidebar.text_input("Klucz OpenAI API", type="password")
@@ -415,8 +408,8 @@ elif st.session_state.menu_choice == "Dashboard":
 
 elif st.session_state.menu_choice == "Generator Briefów":
     st.header("📝 Generator Briefów z GPT-5 Nano")
-    st.info("Krok 1: Wpisz tematy artykułów (każdy w nowej linii). Aplikacja wygeneruje dla nich szczegółowe briefy.")
-    if not openai_api_key or not google_api_key: st.error("Wprowadź klucz OpenAI API oraz Google AI API w panelu bocznym.")
+    st.info("Krok 1: Wpisz tematy artykułów (każdy w nowej linii). Aplikacja wygeneruje dla nich szczegółowe briefy oraz obrazki wyróżniające.")
+    if not openai_api_key or not google_api_key: st.error("Wprowadź klucz OpenAI API oraz Google AI API w panelu bocznym, aby kontynuować.")
     else:
         topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
         if st.button("Generuj briefy i obrazki", type="primary"):
@@ -441,15 +434,17 @@ elif st.session_state.menu_choice == "Generator Briefów":
             st.session_state.menu_choice = "Generowanie Treści"
             st.rerun()
         for i, item in enumerate(st.session_state.generated_briefs):
-            with st.expander(f"**{i+1}. {item['topic']}**"):
+            with st.expander(f"**{i+1}. {item['brief'].get('temat_artykulu', item['topic'])}**"):
                 col1, col2 = st.columns(2)
                 col1.json(item['brief'])
                 if item['image']:
                     col2.image(item['image'], caption="Wygenerowany obrazek wyróżniający")
+                else:
+                    col2.warning("Nie udało się wygenerować obrazka.")
 
 elif st.session_state.menu_choice == "Generowanie Treści":
     st.header("🤖 Generator Treści AI")
-    st.info("Krok 2: Wybierz briefy, Personę autora i model AI, a następnie wygeneruj finalne artykuły.")
+    st.info("Krok 2: Wybierz briefy i Personę autora, a następnie wygeneruj finalne artykuły przy użyciu modelu GPT-5-nano.")
     if not st.session_state.generated_briefs: st.warning("Brak wygenerowanych briefów. Przejdź najpierw do 'Generator Briefów'.")
     else:
         personas_list = db_execute(conn, "SELECT id, name, description FROM personas", fetch="all")
@@ -458,11 +453,15 @@ elif st.session_state.menu_choice == "Generowanie Treści":
         else:
             col1, col2 = st.columns(2)
             selected_persona_name = col1.selectbox("Wybierz Personę autora", options=list(persona_map.keys()))
-            selected_model = col2.selectbox("Wybierz model do generowania artykułów", options=list(MODEL_API_MAP.keys()), key='selected_model_for_articles', index=1)
-            if not api_key: st.error(f"Wprowadź swój {api_key_label} w panelu bocznym.")
+            selected_model = "gpt-5-nano"
+            col2.info(f"Model do generowania artykułów: **{selected_model}**")
+            
+            if not openai_api_key: st.error("Wprowadź swój klucz OpenAI API w panelu bocznym.")
             else:
                 df = pd.DataFrame(st.session_state.generated_briefs)
-                df['Zaznacz'] = False; df['Temat'] = df['topic']; df['Brief'] = df['brief'].apply(lambda x: json.dumps(x, ensure_ascii=False, indent=2))
+                df['Zaznacz'] = False
+                df['Temat'] = df['brief'].apply(lambda x: x.get('temat_artykulu', x.get('topic', 'Brak tytułu')))
+                df['Brief'] = df['brief'].apply(lambda x: json.dumps(x, ensure_ascii=False, indent=2))
                 with st.form("article_generation_form"):
                     st.subheader("Wybierz briefy do przetworzenia")
                     edited_df = st.data_editor(df[['Zaznacz', 'Temat', 'Brief']], hide_index=True, use_container_width=True)
@@ -483,12 +482,13 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                 zagadnienia_str = "\n".join([f"- {z}" for z in brief_data.get("zagadnienia_kluczowe", [])])
                                 final_prompt = final_prompt.replace("{{ZAGADNIENIA_KLUCZOWE}}", zagadnienia_str)
                                 tasks_to_run.append({'title': brief_data.get("temat_artykulu", row["Temat"]), 'prompt': final_prompt, 'keywords': brief_data.get("slowa_kluczowe", []), 'image': st.session_state.generated_briefs[index]['image']})
+                            
                             st.session_state.generated_articles = []
                             with st.spinner(f"Generowanie {len(tasks_to_run)} artykułów..."):
-                                progress_bar = st.progress(0)
+                                progress_bar = st.progress(0, text=f"Ukończono 0/{len(tasks_to_run)}...")
                                 completed_count = 0
                                 with ThreadPoolExecutor(max_workers=10) as executor:
-                                    future_to_task = {executor.submit(generate_article_dispatcher, selected_model, api_key, task['title'], task['prompt']): task for task in tasks_to_run}
+                                    future_to_task = {executor.submit(generate_article_dispatcher, selected_model, openai_api_key, task['title'], task['prompt']): task for task in tasks_to_run}
                                     for future in as_completed(future_to_task):
                                         task = future_to_task[future]
                                         title, content = future.result()
@@ -532,7 +532,7 @@ elif st.session_state.menu_choice == "Zarządzanie Personami":
                     st.rerun()
 
 elif st.session_state.menu_choice == "Harmonogram Publikacji":
-    st.header("Harmonogram Publikacji")
+    st.header("🗓️ Harmonogram Publikacji")
     st.info("Krok 3: Wybierz artykuły, ustawienia publikacji i zaplanuj je z rozłożeniem w czasie.")
     if not st.session_state.generated_articles:
         st.warning("Brak wygenerowanych artykułów. Przejdź do 'Generator Briefów', a następnie 'Generowanie Treści'.")
@@ -561,12 +561,11 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                 selected_categories = st.multiselect("Wybierz kategorie", options=available_categories.keys())
                 
                 tags_str = st.text_input("Tagi (wspólne dla wszystkich, oddzielone przecinkami)")
-                featured_image_url_override = st.text_input("URL obrazka wyróżniającego (opcjonalnie, nadpisze wygenerowany)", help="Użyj tylko, jeśli chcesz nadpisać obrazek wygenerowany z briefem.")
                 
                 st.subheader("3. Planowanie w czasie (Staggering)")
                 col_date1, col_date2, col_date3 = st.columns(3)
-                start_date = col_date1.date_input("Data publikacji pierwszego artykułu")
-                start_time = col_date2.time_input("Godzina publikacji pierwszego artykułu")
+                start_date = col_date1.date_input("Data publikacji pierwszego artykułu", datetime.now())
+                start_time = col_date2.time_input("Godzina publikacji pierwszego artykułu", datetime.now().time())
                 interval_hours = col_date3.number_input("Odstęp między publikacjami (w godzinach)", min_value=1, value=8)
                 
                 submitted = st.form_submit_button("Zaplanuj zaznaczone artykuły", type="primary")
@@ -578,29 +577,30 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                         current_publish_time = datetime.combine(start_date, start_time)
                         with st.spinner("Planowanie publikacji..."):
                             for index, row in selected_articles.iterrows():
-                                full_article_data = st.session_state.generated_articles[index]
-                                for site_name in selected_sites_names:
-                                    site_id = site_options[site_name][0]
-                                    site_info = site_options[site_name]
-                                    url, username, encrypted_pass = site_info[2], site_info[3], site_info[4]
-                                    password = decrypt_data(encrypted_pass)
-                                    api = WordPressAPI(url, username, password)
-                                    
-                                    site_categories = api.get_categories()
-                                    target_category_ids = [site_categories[name] for name in selected_categories if name in site_categories]
-                                    
-                                    target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
-                                    
-                                    st.info(f"Planowanie '{row['title']}' na {site_name} na dzień {current_publish_time.strftime('%Y-%m-%d %H:%M')}...")
-                                    success, message, _ = api.publish_post(
-                                        row['title'], full_article_data['content'], "future", current_publish_time.isoformat(),
-                                        target_category_ids, target_tags, author_id=int(author_id) if author_id else None,
-                                        featured_image_bytes=full_article_data['image'] if not featured_image_url_override else None,
-                                        meta_title=row['meta_title'], meta_description=row['meta_description']
-                                    )
-                                    if success: st.success(f"[{site_name}]: {message}")
-                                    else: st.error(f"[{site_name}]: {message}")
-                                current_publish_time += timedelta(hours=interval_hours)
+                                # Upewnij się, że indeks jest prawidłowy
+                                if index < len(st.session_state.generated_articles):
+                                    full_article_data = st.session_state.generated_articles[index]
+                                    for site_name in selected_sites_names:
+                                        site_info = site_options[site_name]
+                                        url, username, encrypted_pass = site_info[2], site_info[3], site_info[4]
+                                        password = decrypt_data(encrypted_pass)
+                                        api = WordPressAPI(url, username, password)
+                                        
+                                        site_categories = api.get_categories()
+                                        target_category_ids = [site_categories[name] for name in selected_categories if name in site_categories]
+                                        
+                                        target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
+                                        
+                                        st.info(f"Planowanie '{row['title']}' na {site_name} na dzień {current_publish_time.strftime('%Y-%m-%d %H:%M')}...")
+                                        success, message, _ = api.publish_post(
+                                            row['title'], full_article_data['content'], "future", current_publish_time.isoformat(),
+                                            target_category_ids, target_tags, author_id=int(author_id) if author_id else None,
+                                            featured_image_bytes=full_article_data.get('image'),
+                                            meta_title=row['meta_title'], meta_description=row['meta_description']
+                                        )
+                                        if success: st.success(f"[{site_name}]: {message}")
+                                        else: st.error(f"[{site_name}]: {message}")
+                                    current_publish_time += timedelta(hours=interval_hours)
                         st.success("Zakończono planowanie wszystkich zaznaczonych artykułów!")
 
 elif st.session_state.menu_choice == "Zarządzanie Treścią":
@@ -613,7 +613,6 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
         if selected_site_name:
             site_id, name, url, username, encrypted_pass = site_options[selected_site_name]
             password = decrypt_data(encrypted_pass)
-            api = WordPressAPI(url, username, password)
             st.subheader(f"Wpisy na stronie: {name}")
             @st.cache_data(ttl=300)
             def get_site_data(_url, _username, _password):
@@ -622,7 +621,10 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
                 categories = api_instance.get_categories()
                 all_users = api_instance.get_users()
                 return posts, categories, all_users
-            posts, categories, all_users = get_site_data(url, username, password)
+            
+            with st.spinner(f"Pobieranie danych ze strony {name}..."):
+                posts, categories, all_users = get_site_data(url, username, password)
+            
             users_from_posts = {post['author_name']: post['author_id'] for post in posts if post.get('author_name') != 'N/A'} if posts else {}
             final_users_map = {**all_users, **users_from_posts}
             if not posts: st.info("Nie znaleziono wpisów na tej stronie lub wystąpił błąd połączenia.")
@@ -630,12 +632,13 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
                 df = pd.DataFrame(posts).rename(columns={'author_name': 'author'})
                 df['Zaznacz'] = False
                 st.info("Zaznacz wpisy, które chcesz edytować, a następnie użyj formularza masowej edycji poniżej.")
-                edited_df = st.data_editor(df, column_config={"Zaznacz": st.column_config.CheckboxColumn(required=True)},
-                                           disabled=["id", "title", "date", "author", "categories", "author_id"], hide_index=True, use_container_width=True)
+                edited_df = st.data_editor(df[['Zaznacz', 'id', 'title', 'date', 'author', 'categories']], column_config={"Zaznacz": st.column_config.CheckboxColumn(required=True)},
+                                           disabled=["id", "title", "date", "author", "categories"], hide_index=True, use_container_width=True)
                 selected_posts = edited_df[edited_df.Zaznacz]
                 if not selected_posts.empty:
                     st.subheader(f"Masowa edycja dla {len(selected_posts)} zaznaczonych wpisów")
                     with st.form("bulk_edit_form"):
+                        api = WordPressAPI(url, username, password) # Re-inicjalizacja API do edycji
                         new_category_names = st.multiselect("Zastąp kategorie", options=categories.keys())
                         new_author_name = st.selectbox("Zmień autora", options=[None] + sorted(list(final_users_map.keys())))
                         submitted = st.form_submit_button("Wykonaj masową edycję")
@@ -655,5 +658,6 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
                                         progress_bar.progress((i + 1) / total_selected)
                                 st.info("Proces zakończony. Odśwież dane, aby zobaczyć zmiany.")
                                 st.cache_data.clear()
+                                st.rerun()
                 else:
                     st.caption("Zaznacz przynajmniej jeden wpis, aby aktywować panel masowej edycji.")
