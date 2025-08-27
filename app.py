@@ -175,7 +175,7 @@ Kluczowe zagadnienia do poruszenia:
 
 # STYL I TON
 - **Doświadczenie (Experience):** Wplataj w treść zwroty wskazujące na osobiste doświadczenie, np. "Z mojego doświadczenia...", "Częstym błędem, który obserwuję, jest...".
-- **Ekspertyza (Expertise):** Używaj precyzyjnej terminologii.
+- **Ekspertyza (Expertise):** Używaj precycyzyjnej terminologii.
 - **Autorytatywność (Authoritativeness):** Pisz w sposób pewny i zdecydowany.
 - **Zaufanie (Trustworthiness):** Bądź transparentny. Jeśli produkt lub metoda ma wady, wspomnij o nich.
 
@@ -235,7 +235,7 @@ def generate_image_gemini(api_key, image_prompt):
         genai.configure(api_key=api_key)
         client = genai.Client()
         response = client.models.generate_content(
-            model="gemini-1.5-flash-image-preview", # Zgodnie z Twoją prośbą
+            model="gemini-1.5-flash-image-preview",
             contents=[image_prompt],
         )
         for part in response.candidates[0].content.parts:
@@ -299,21 +299,12 @@ menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Br
 st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice', on_change=lambda: st.session_state.update(menu_choice=st.session_state.menu_choice))
 
 st.sidebar.header("Konfiguracja API")
-MODEL_API_MAP = {"gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")}
-active_model_for_articles = st.session_state.get('selected_model_for_articles', "gpt-5-nano")
-active_model_for_briefs = "gpt-5-nano"
-active_model_key = st.session_state.menu_choice
-if active_model_key == "Generator Briefów":
-    active_model = active_model_for_briefs
-elif active_model_key == "Generowanie Treści":
-    active_model = active_model_for_articles
-else:
-    active_model = "gpt-5-nano"
-
-api_key_name, api_key_label = MODEL_API_MAP.get(active_model, (None, None))
-api_key = st.secrets.get(api_key_name) if api_key_name else None
-if not api_key:
-    api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}.")
+openai_api_key = st.secrets.get("OPENAI_API_KEY")
+if not openai_api_key:
+    openai_api_key = st.sidebar.text_input("Klucz OpenAI API", type="password")
+google_api_key = st.secrets.get("GOOGLE_API_KEY")
+if not google_api_key:
+    google_api_key = st.sidebar.text_input("Klucz Google AI API", type="password")
 
 with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
     uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
@@ -413,7 +404,6 @@ elif st.session_state.menu_choice == "Dashboard":
 elif st.session_state.menu_choice == "Generator Briefów":
     st.header("📝 Generator Briefów z GPT-5 Nano")
     st.info("Krok 1: Wpisz tematy artykułów (każdy w nowej linii). Aplikacja wygeneruje dla nich szczegółowe briefy.")
-    if MODEL_API_MAP[active_model_for_briefs][0] != api_key_name: st.warning(f"Generator briefów używa {active_model_for_briefs}. Upewnij się, że w panelu bocznym jest aktywny i wpisany klucz {MODEL_API_MAP[active_model_for_briefs][1]}.")
     if not openai_api_key or not google_api_key: st.error("Wprowadź klucz OpenAI API oraz Google AI API w panelu bocznym.")
     else:
         topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
@@ -457,7 +447,6 @@ elif st.session_state.menu_choice == "Generowanie Treści":
             col1, col2 = st.columns(2)
             selected_persona_name = col1.selectbox("Wybierz Personę autora", options=list(persona_map.keys()))
             selected_model = col2.selectbox("Wybierz model do generowania artykułów", options=list(MODEL_API_MAP.keys()), key='selected_model_for_articles', index=1)
-            if MODEL_API_MAP[selected_model][0] != api_key_name: st.warning(f"Wybrany model wymaga klucza {MODEL_API_MAP[selected_model][1]}. Upewnij się, że jest aktywny i wpisany w panelu bocznym.")
             if not api_key: st.error(f"Wprowadź swój {api_key_label} w panelu bocznym.")
             else:
                 df = pd.DataFrame(st.session_state.generated_briefs)
