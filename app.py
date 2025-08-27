@@ -5,15 +5,11 @@ import requests
 from requests.auth import HTTPBasicAuth
 from datetime import datetime, timedelta
 import json
-import os
 from cryptography.fernet import Fernet
 import base64
 import google.generativeai as genai
 import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlparse
-import io
-from PIL import Image
 
 # --- KONFIGURACJA I INICJALIZACJA ---
 
@@ -216,48 +212,9 @@ def generate_article_dispatcher(model, api_key, title, prompt):
     try:
         if model == "gemini-1.5-flash": return generate_article_two_parts(call_gemini, api_key, title, prompt)
         elif model == "gpt-4o-mini": return generate_article_two_parts(call_gpt4o_mini, api_key, title, prompt)
-        # UWAGA: Model 'gpt-5-nano' nie istnieje. Zastąpiono go 'gpt-4o-mini'.
-        elif model == "gpt-5-nano": return generate_article_two_parts(call_gpt4o_mini, api_key, title, prompt)
         else: return title, f"**BŁĄD: Nieznany model '{model}'**"
     except Exception as e:
         return title, f"**BŁĄD KRYTYCZNY:** {str(e)}"
-
-def generate_image_prompt(api_key, article_title):
-    try:
-        prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI. Prompt musi opisywać FOTOGRAFICZNY, realistyczny obraz, który wizualnie reprezentuje temat artykułu. Zasady:
-- Prompt musi być w języku angielskim.
-- Musi zawierać: "photorealistic", "sharp focus", "soft light".
-- NIE MOŻE zawierać słów sugerujących tekst, litery, logotypy.
-- Bądź zwięzły (1-2 zdania).
-
-Temat artykułu: "{article_title}"
-Wygeneruj tylko prompt."""
-        # UWAGA: Model 'gpt-5-nano' nie istnieje. Zastąpiono go 'gpt-4o-mini'.
-        return call_gpt4o_mini(api_key, prompt).strip()
-    except Exception:
-        return f"Photorealistic image representing the topic: {article_title}, sharp focus, soft light, no text, no logos"
-
-def generate_image_gemini(api_key, image_prompt):
-    try:
-        genai.configure(api_key=api_key)
-        # Używamy modelu zdolnego do generowania obrazów
-        model = genai.GenerativeModel('gemini-1.5-pro')
-        
-        # Prompt jest prosty - zawiera polecenie wygenerowania obrazu
-        full_prompt = f"Generate a photorealistic image based on this description: {image_prompt}"
-        response = model.generate_content(full_prompt)
-        
-        # Przetwarzamy odpowiedź w poszukiwaniu danych obrazu (zgodnie z Twoją sugestią)
-        for part in response.parts:
-            if part.inline_data:
-                return part.inline_data.data
-        
-        # Jeśli model nie zwrócił obrazu, tylko tekst, informujemy o tym
-        st.error(f"Model nie zwrócił obrazu. Zamiast tego odpowiedział tekstem: {response.text}")
-        return None
-    except Exception as e:
-        st.error(f"Błąd generowania obrazu (Gemini): {e}")
-        return None
 
 def generate_single_brief(api_key, topic):
     try:
@@ -270,7 +227,6 @@ Brief musi być w formacie JSON i zawierać klucze:
 - "dodatkowe_slowa_semantyczne": Array 5-10 fraz i kolokacji semantycznie wspierających główny temat.
 
 Wygeneruj brief JSON dla tematu: "{topic}" """
-        # UWAGA: Model 'gpt-5-nano' nie istnieje. Zastąpiono go 'gpt-4o-mini'.
         json_string = call_gpt4o_mini(api_key, brief_prompt).strip().replace("```json", "").replace("```", "")
         brief_data = json.loads(json_string)
         return topic, brief_data
@@ -286,7 +242,6 @@ Treść artykułu (fragment):
 {article_content[:2500]}
 
 Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (max 60 znaków, angażujący, z główną frazą na początku) i "meta_description" (max 155 znaków, zachęcający do kliknięcia, z call-to-action i słowami kluczowymi)."""
-        # UWAGA: Model 'gpt-5-nano' nie istnieje. Zastąpiono go 'gpt-4o-mini'.
         json_string = call_gpt4o_mini(api_key, prompt).strip().replace("```json", "").replace("```", "")
         return json.loads(json_string)
     except Exception:
@@ -300,6 +255,21 @@ st.caption("Centralne zarządzanie i generowanie treści dla Twojej sieci blogó
 
 conn = get_db_connection()
 
+# Pobieranie kluczy API z Streamlit Secrets
+try:
+    openai_api_key = st.secrets["OPENAI_API_KEY"]
+    google_api_key = st.secrets["GOOGLE_API_KEY"]
+except KeyError:
+    st.sidebar.error("Brak kluczy API w pliku secrets.toml!")
+    st.sidebar.info("Dodaj swoje klucze do pliku `.streamlit/secrets.toml`:\n\n"
+                    "```toml\n"
+                    'OPENAI_API_KEY = "sk-..."\n'
+                    'GOOGLE_API_KEY = "AIza..."\n'
+                    "```")
+    openai_api_key = None
+    google_api_key = None
+
+
 if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Zarządzanie Stronami"
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
@@ -309,10 +279,11 @@ menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Br
 st.session_state.menu_choice = st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_radio', label_visibility="collapsed")
 
 st.sidebar.header("Konfiguracja API")
-# UWAGA: Usunięto fikcyjny model 'gpt-5-nano'
-MODEL_API_MAP = {"gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")}
-openai_api_key = st.sidebar.text_input("Klucz OpenAI API (dla GPT)", type="password", key="openai_key")
-google_api_key = st.sidebar.text_input("Klucz Google AI API (dla Gemini)", type="password", key="google_key")
+if openai_api_key and google_api_key:
+    st.sidebar.success("Klucze API załadowane poprawnie.")
+else:
+    st.sidebar.warning("Klucze API nie zostały załadowane.")
+
 
 with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
     uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
@@ -411,7 +382,7 @@ elif st.session_state.menu_choice == "Dashboard":
 elif st.session_state.menu_choice == "Generator Briefów":
     st.header("📝 Generator Briefów z GPT-4o-mini")
     st.info("Krok 1: Wpisz tematy artykułów (każdy w nowej linii). Aplikacja wygeneruje dla nich szczegółowe briefy.")
-    if not openai_api_key: st.error("Wprowadź klucz OpenAI API w panelu bocznym.")
+    if not openai_api_key: st.error("Wprowadź klucz OpenAI API w pliku `secrets.toml`, aby kontynuować.")
     else:
         topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
         if st.button("Generuj briefy", type="primary"):
@@ -450,17 +421,19 @@ elif st.session_state.menu_choice == "Generowanie Treści":
         else:
             col1, col2 = st.columns(2)
             selected_persona_name = col1.selectbox("Wybierz Personę autora", options=list(persona_map.keys()))
-            selected_model = col2.selectbox("Wybierz model do generowania artykułów", options=list(MODEL_API_MAP.keys()), key='selected_model_for_articles', index=0)
             
-            api_key = None
-            if selected_model == 'gpt-4o-mini' or selected_model == 'gpt-5-nano':
-                api_key = openai_api_key
-                if not api_key: st.error("Wprowadź klucz OpenAI API w panelu bocznym.")
-            elif selected_model == 'gemini-1.5-flash':
-                api_key = google_api_key
-                if not api_key: st.error("Wprowadź klucz Google AI API w panelu bocznym.")
-
-            if api_key:
+            # Dostosowanie listy modeli w zależności od dostępnych kluczy
+            available_models = []
+            if openai_api_key: available_models.append("gpt-4o-mini")
+            if google_api_key: available_models.append("gemini-1.5-flash")
+            
+            if not available_models:
+                st.error("Brak dostępnych kluczy API. Nie można wygenerować treści.")
+            else:
+                selected_model = col2.selectbox("Wybierz model do generowania artykułów", options=available_models, key='selected_model_for_articles')
+                
+                api_key_for_model = openai_api_key if 'gpt' in selected_model else google_api_key
+                
                 df = pd.DataFrame(st.session_state.generated_briefs)
                 df['Zaznacz'] = False
                 df['Temat'] = df['topic']
@@ -490,11 +463,12 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                 progress_bar = st.progress(0, text=f"Ukończono 0/{len(tasks_to_run)}...")
                                 completed_count = 0
                                 with ThreadPoolExecutor(max_workers=10) as executor:
-                                    future_to_task = {executor.submit(generate_article_dispatcher, selected_model, api_key, task['title'], task['prompt']): task for task in tasks_to_run}
+                                    future_to_task = {executor.submit(generate_article_dispatcher, selected_model, api_key_for_model, task['title'], task['prompt']): task for task in tasks_to_run}
                                     for future in as_completed(future_to_task):
                                         task = future_to_task[future]
                                         title, content = future.result()
                                         st.info(f"Generowanie meta tagów dla: {title}...")
+                                        # Meta tagi są zawsze generowane przez GPT-4o-mini dla jakości
                                         meta_tags = generate_meta_tags(openai_api_key, title, content, task['keywords'])
                                         st.session_state.generated_articles.append({"title": title, "content": content, **meta_tags})
                                         completed_count += 1
@@ -565,7 +539,6 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                 selected_categories = st.multiselect("Wybierz kategorie", options=available_categories.keys())
                 tags_str = st.text_input("Tagi (wspólne dla wszystkich, oddzielone przecinkami)")
                 
-                # POPRAWKA: Zmiana z URL na upload pliku
                 uploaded_image = st.file_uploader("Wgraj obrazek wyróżniający (wspólny dla wszystkich)", type=['png', 'jpg', 'jpeg'])
                 
                 st.subheader("3. Planowanie w czasie (Staggering)")
@@ -580,7 +553,6 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                     if selected_articles.empty or not selected_sites_names:
                         st.error("Zaznacz przynajmniej jeden artykuł i jedną stronę docelową.")
                     else:
-                        # POPRAWKA: Przetwarzanie wgranego obrazka
                         image_bytes = uploaded_image.getvalue() if uploaded_image else None
                         
                         current_publish_time = datetime.combine(start_date, start_time)
@@ -589,9 +561,11 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                         completed_tasks = 0
 
                         with st.spinner("Planowanie publikacji..."):
-                            for site_name in selected_sites_names:
-                                for index, row in selected_articles.iterrows():
-                                    full_article_data = st.session_state.generated_articles[row.name]
+                            # Pętla po artykułach
+                            for index, row in selected_articles.iterrows():
+                                # Pętla po stronach dla każdego artykułu
+                                for site_name in selected_sites_names:
+                                    full_article_data = st.session_state.generated_articles[row.name] # Użycie row.name dla pewnego indeksowania
                                     site_info = site_options[site_name]
                                     url, username, encrypted_pass = site_info[2], site_info[3], site_info[4]
                                     password = decrypt_data(encrypted_pass)
@@ -622,8 +596,7 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                                     completed_tasks += 1
                                     progress_bar.progress(completed_tasks / total_tasks, text=f"Zaplanowano {completed_tasks}/{total_tasks}")
                                 
-                                # Przesuń czas publikacji dla następnej strony (jeśli chcemy unikalne czasy dla każdej strony)
-                                # lub dla następnego artykułu (co jest bardziej typowe)
+                                # Przesuń czas publikacji dla następnego ARTYKUŁU
                                 current_publish_time += timedelta(hours=interval_hours)
 
                         st.success("Zakończono planowanie wszystkich zaznaczonych artykułów!")
@@ -685,5 +658,6 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
                                         progress_bar.progress((i + 1) / total_selected)
                                 st.info("Proces zakończony. Odśwież dane, aby zobaczyć zmiany.")
                                 st.cache_data.clear()
+                                st.rerun()
                 else:
                     st.caption("Zaznacz przynajmniej jeden wpis, aby aktywować panel masowej edycji.")
