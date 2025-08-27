@@ -317,8 +317,6 @@ if not openai_api_key:
 google_api_key = st.secrets.get("GOOGLE_API_KEY")
 if not google_api_key:
     google_api_key = st.sidebar.text_input("Klucz Google AI API", type="password")
-if not api_key:
-    api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}.")
 
 with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
     uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
