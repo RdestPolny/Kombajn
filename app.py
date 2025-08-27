@@ -168,7 +168,7 @@ MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
 Artykuł jest skierowany do {{GRUPA_DOCELOWA}}. Używaj języka, który jest dla nich zrozumiały, ale nie unikaj terminologii branżowej – wyjaśniaj ją w prosty sposób.
 
 # STRUKTURA I GŁĘBIA
-**Zasada Odwróconej Piramidy:** Rozpocznij artykuł od razu od konkretnej i zwięzłej odpowiedzi na główne pytanie zawarte w tytule. Pierwszy akapit (lead) musi dostarczać natychmiastowej wartości. Dopiero w dalszej części rozwiń temat szczegółowo.
+**Zasada Odwróconej Piramidy (Answer-First Lead):** Rozpocznij artykuł naturalnie, ale wpleć w pierwszy akapit (lead) bezpośrednią i zwięzłą odpowiedź na główne pytanie z tematu. Unikaj wstępów typu "W tym artykule dowiesz się...", "Oto odpowiedź na Twoje pytanie:". Czytelnik musi otrzymać kluczową wartość od razu, w sposób płynny i angażujący.
 Artykuł musi mieć logiczną strukturę. Rozwiń temat w kilku kluczowych sekcjach, a zakończ praktycznym podsumowaniem.
 Kluczowe zagadnienia do poruszenia:
 {{ZAGADNIENIA_KLUCZOWE}}
@@ -184,7 +184,7 @@ Naturalnie wpleć w treść następujące słowa kluczowe: {{SLOWA_KLUCZOWE}}.
 Dodatkowo, wpleć w treść poniższe frazy semantyczne, aby zwiększyć głębię tematyczną: {{DODATKOWE_SLOWA_SEMANTYCZNE}}.
 
 # FORMATOWANIE
-Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym."""
+Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym. Używaj pogrubień (<b> lub <strong>), aby wyróżnić kluczowe terminy i najważniejsze informacje, co ułatwia skanowanie tekstu. Jeśli dane można przedstawić w formie porównania lub kroków, rozważ użycie prostej tabeli (<table>) dla lepszej czytelności."""
 
 def call_gemini(api_key, prompt):
     genai.configure(api_key=api_key)
@@ -218,17 +218,14 @@ def generate_article_dispatcher(model, api_key, title, prompt):
 
 def generate_image_prompt_gpt5(api_key, article_title):
     try:
-        prompt = f"""Jesteś art directorem specjalizującym się w obrazach do artykułów blogowych. Twoim zadaniem jest stworzenie krótkiego, ale sugestywnego promptu do generatora obrazów AI (text-to-image).
-Prompt musi opisywać FOTOGRAFICZNY, realistyczny obraz, który wizualnie reprezentuje temat artykułu.
-Zasady:
+        prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI. Prompt musi opisywać FOTOGRAFICZNY, realistyczny obraz, który wizualnie reprezentuje temat artykułu. Zasady:
 - Prompt musi być w języku angielskim.
-- Prompt musi zawierać słowa kluczowe takie jak: "photorealistic", "sharp focus", "soft light".
-- Prompt NIE MOŻE zawierać żadnych słów sugerujących tekst, litery, logotypy, znaki wodne.
-- Prompt powinien być zwięzły (1-2 zdania).
+- Musi zawierać: "photorealistic", "sharp focus", "soft light".
+- NIE MOŻE zawierać słów sugerujących tekst, litery, logotypy.
+- Bądź zwięzły (1-2 zdania).
 
 Temat artykułu: "{article_title}"
-
-Wygeneruj tylko i wyłącznie prompt, bez żadnych dodatkowych komentarzy."""
+Wygeneruj tylko prompt."""
         return call_gpt5_nano(api_key, prompt).strip()
     except Exception:
         return f"Photorealistic image representing the topic: {article_title}, sharp focus, soft light, no text, no logos"
@@ -236,9 +233,8 @@ Wygeneruj tylko i wyłącznie prompt, bez żadnych dodatkowych komentarzy."""
 def generate_image_gemini(api_key, image_prompt):
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash') # Upewnij się, że ten model obsługuje generowanie obrazów
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(image_prompt, generation_config={"response_mime_type": "image/png"})
-        # Logika wyciągania danych obrazu może się różnić w zależności od API
         return response.parts[0].inline_data.data
     except Exception as e:
         st.error(f"Błąd generowania obrazu: {e}")
@@ -246,7 +242,6 @@ def generate_image_gemini(api_key, image_prompt):
 
 def generate_brief_and_image(openai_api_key, google_api_key, topic):
     try:
-        # Krok 1: Generowanie briefu tekstowego
         brief_prompt = f"""Jesteś strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na temat: "{topic}".
 Brief musi być w formacie JSON i zawierać klucze:
 - "temat_artykulu": Dokładny, angażujący tytuł.
@@ -259,10 +254,7 @@ Wygeneruj brief JSON dla tematu: "{topic}" """
         json_string = call_gpt5_nano(openai_api_key, brief_prompt).strip().replace("```json", "").replace("```", "")
         brief_data = json.loads(json_string)
 
-        # Krok 2: Generowanie promptu do obrazu
         image_prompt = generate_image_prompt_gpt5(openai_api_key, brief_data['temat_artykulu'])
-
-        # Krok 3: Generowanie obrazu
         image_bytes = generate_image_gemini(google_api_key, image_prompt)
         
         return topic, brief_data, image_bytes
@@ -297,16 +289,24 @@ if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs
 
 st.sidebar.header("Menu Główne")
 menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "Dashboard"]
-st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice', on_change=lambda: st.session_state.update(menu_choice=st.session_state.menu_choice))
+st.session_state.menu_choice = st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_radio', label_visibility="collapsed")
 
 st.sidebar.header("Konfiguracja API")
-openai_api_key = st.secrets.get("OPENAI_API_KEY")
-if not openai_api_key:
-    openai_api_key = st.sidebar.text_input("Klucz OpenAI API", type="password")
+MODEL_API_MAP = {"gpt-4o-mini": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gpt-5-nano": ("OPENAI_API_KEY", "Klucz OpenAI API"), "gemini-1.5-flash": ("GOOGLE_API_KEY", "Klucz Google AI API")}
+active_model_for_articles = st.session_state.get('selected_model_for_articles', "gpt-5-nano")
+active_model_for_briefs = "gpt-5-nano"
+active_model_key = st.session_state.menu_choice
+if active_model_key == "Generator Briefów":
+    active_model = active_model_for_briefs
+elif active_model_key == "Generowanie Treści":
+    active_model = active_model_for_articles
+else:
+    active_model = "gpt-5-nano"
 
-google_api_key = st.secrets.get("GOOGLE_API_KEY")
-if not google_api_key:
-    google_api_key = st.sidebar.text_input("Klucz Google AI API", type="password")
+api_key_name, api_key_label = MODEL_API_MAP.get(active_model, (None, None))
+api_key = st.secrets.get(api_key_name) if api_key_name else None
+if not api_key:
+    api_key = st.sidebar.text_input(api_key_label, type="password", help=f"Wklej swój klucz {api_key_label}.")
 
 with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
     uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
