@@ -231,37 +231,43 @@ Wygeneruj tylko prompt."""
 def generate_image_gemini(api_key, image_prompt):
     try:
         genai.configure(api_key=api_key)
-        client = genai.Client()
-        contents = [types.Content(role="user", parts=[types.Part.from_text(text=image_prompt)])]
+
+        # Używamy starszego, bardziej kompatybilnego interfejsu GenerativeModel
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash-image-preview")
+
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["IMAGE", "TEXT"],
-            safety_settings=[
-                types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
-                types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
-                types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
-            ],
         )
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-image-preview",
-            contents=contents,
+        
+        safety_settings=[
+            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+        ]
+
+        # Konfiguracja jest przekazywana bezpośrednio do metody generate_content
+        response = model.generate_content(
+            contents=image_prompt,
             generation_config=generate_content_config,
+            safety_settings=safety_settings
         )
 
         failure_reason = None
         for part in response.candidates[0].content.parts:
             if part.inline_data is not None:
-                return part.inline_data.data, None  # Sukces: zwraca dane i brak błędu
+                return part.inline_data.data, None
             if part.text is not None:
                 failure_reason = part.text
 
         if failure_reason:
             return None, f"Model odmówił wygenerowania obrazu. Powód: '{failure_reason}'"
         else:
-            return None, f"Model nie zwrócił danych obrazu (brak konkretnego błędu). Sprawdź prompt: '{image_prompt}'"
+            return None, f"Model nie zwrócił danych obrazu. Sprawdź prompt: '{image_prompt}'"
 
     except Exception as e:
         return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
+
 
 def generate_brief_and_image(openai_api_key, google_api_key, topic):
     try:
@@ -457,13 +463,11 @@ elif st.session_state.menu_choice == "Generator Briefów":
             with st.expander(f"**{i+1}. {item['brief'].get('temat_artykulu', item['topic'])}**"):
                 col1, col2 = st.columns(2)
                 
-                # Wyświetlanie briefu lub błędu briefu
                 if 'error' in item['brief']:
                     col1.error(f"Błąd generowania briefu: {item['brief']['error']}")
                 else:
                     col1.json(item['brief'])
 
-                # Wyświetlanie obrazu lub błędu obrazu
                 if item['image_error']:
                     col2.error(item['image_error'])
                 elif item['image']:
@@ -488,7 +492,6 @@ elif st.session_state.menu_choice == "Generowanie Treści":
             
             if not openai_api_key: st.error("Wprowadź swój klucz OpenAI API w panelu bocznym.")
             else:
-                # Filtrujemy briefy, które mają obraz i nie mają błędu
                 valid_briefs_for_articles = [b for b in st.session_state.generated_briefs if not b['brief'].get('error')]
                 
                 df = pd.DataFrame(valid_briefs_for_articles)
