@@ -235,7 +235,7 @@ PRZYKŁADY DOBRYCH PROMPTÓW:
 
 Temat artykułu: "{article_title}"
 
-Wygeneruj TYLKO prompt (2-4 zdania). Pamiętaj o formacie 4:3 i zakazie tekstu!"""
+Wygeneruj TYLKO prompt (1-2 zdania). Pamiętaj o formacie 4:3 i zakazie tekstu!"""
     return call_gpt5_nano(api_key, prompt).strip()
 
 def generate_image_gemini(api_key, image_prompt, aspect_ratio="4:3"):
