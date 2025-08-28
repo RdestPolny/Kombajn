@@ -120,15 +120,31 @@ class WordPressAPI:
                 final_posts.append({"id": p['id'], "title": p['title']['rendered'], "date": datetime.fromisoformat(p['date']).strftime('%Y-%m-%d %H:%M'), "author_name": author_map.get(p['author'], 'N/A'), "author_id": p['author'], "categories": ", ".join(filter(None, [category_map.get(cid, '') for cid in p['categories']]))})
             return final_posts
 
+    # --- POCZĄTEK NAPRAWIONEJ SEKCJI ---
     def upload_image_from_bytes(self, image_bytes, filename):
         try:
-            headers = {'Content-Disposition': f'attachment; filename={filename}'}
-            upload_response = requests.post(f"{self.base_url}/media", headers=headers, data=image_bytes, auth=self.auth)
+            # ZMIANA: Używamy parametru 'files' zamiast 'data'.
+            # 'requests' automatycznie zbuduje poprawne zapytanie multipart/form-data.
+            # Klucz 'file' jest tym, czego oczekuje WordPress API.
+            # Podajemy krotkę (nazwa_pliku, dane_binarne, typ_mime) dla pełnej kompatybilności.
+            files = {'file': (filename, image_bytes, 'image/png')}
+
+            upload_response = requests.post(
+                f"{self.base_url}/media",
+                files=files,
+                auth=self.auth,
+                timeout=30  # Zwiększamy timeout na wypadek wolniejszego uploadu
+            )
             upload_response.raise_for_status()
             return upload_response.json().get('id')
-        except Exception as e:
-            st.warning(f"Nie udało się wgrać obrazka z bajtów: {filename}. Błąd: {e}")
+        except requests.exceptions.HTTPError as e:
+            # Dodajemy bardziej szczegółowe logowanie błędu, aby zobaczyć odpowiedź serwera
+            st.warning(f"Nie udało się wgrać obrazka '{filename}'. Błąd HTTP ({e.response.status_code}): {e.response.text}")
             return None
+        except Exception as e:
+            st.warning(f"Nie udało się wgrać obrazka z bajtów: {filename}. Błąd ogólny: {e}")
+            return None
+    # --- KONIEC NAPRAWIONEJ SEKCJI ---
 
     def update_post(self, post_id, data):
         try:
@@ -168,7 +184,7 @@ MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
 # GRUPA DOCELOWA
 Artykuł jest skierowany do {{GRUPA_DOCELOWA}}. Używaj języka, który jest dla nich zrozumiały, ale nie unikaj terminologii branżowej – wyjaśniaj ją w prosty sposób.
 
-# STRUKTURĘ I GŁĘBIA
+# STRUKTURA I GŁĘBIA
 **Zasada Odwróconej Piramidy (Answer-First Lead):** Rozpocznij artykuł naturalnie, ale wpleć w pierwszy akapit (lead) bezpośrednią i zwięzłą odpowiedź na główne pytanie z tematu. Unikaj wstępów typu "W tym artykule dowiesz się...", "Oto odpowiedź na Twoje pytanie:". Czytelnik musi otrzymać kluczową wartość od razu, w sposób płynny i angażujący.
 Artykuł musi mieć logiczną strukturę. Rozwiń temat w kilku kluczowych sekcjach, a zakończ praktycznym podsumowaniem.
 Kluczowe zagadnienia do poruszenia:
@@ -356,19 +372,16 @@ Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (m
 
 st.set_page_config(layout="wide", page_title="PBN Manager")
 
-# --- POCZĄTEK NAPRAWIONEJ SEKCJI ---
 # Inicjalizacja stanu sesji musi być na samym początku
 if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Zarządzanie Stronami"
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
 
 # Kontroler przekierowań - uruchamiany PRZED renderowaniem jakichkolwiek widgetów
-# Sprawdza flagę, zmienia stan i natychmiastowo odświeża stronę.
 if st.session_state.get('redirect_to_scheduler', False):
-    st.session_state.redirect_to_scheduler = False  # Zresetuj flagę
+    st.session_state.redirect_to_scheduler = False
     st.session_state.menu_choice = "Harmonogram Publikacji"
     st.rerun()
-# --- KONIEC NAPRAWIONEJ SEKCJI ---
 
 st.title("🚀 PBN Manager")
 st.caption("Centralne zarządzanie i generowanie treści dla Twojej sieci blogów.")
@@ -672,8 +685,6 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                             progress_bar.progress(completed_count / len(tasks_to_run), text=f"Ukończono {completed_count}/{len(tasks_to_run)}...")
                                 st.success("Generowanie artykułów zakończone!")
                                 
-                                # Ta sekcja pozostaje bez zmian. Ustawia flagę i wywołuje rerun.
-                                # Kontroler na górze strony przechwyci to w następnym przebiegu.
                                 st.session_state.redirect_to_scheduler = True
                                 st.rerun()
 
