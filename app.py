@@ -214,23 +214,38 @@ def generate_article_dispatcher(model, api_key, title, prompt):
         return title, f"**BŁĄD KRYTYCZNY podczas generowania artykułu:** {str(e)}"
 
 def generate_image_prompt_gpt5(api_key, article_title):
-    prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI. Prompt musi opisywać FOTOGRAFICZNY, realistyczny obraz, który wizualnie reprezentuje temat artykułu. Zasady:
-- Prompt musi być w języku angielskim.
-- Musi zawierać: "photorealistic", "sharp focus", "soft light".
-- NIE MOŻE zawierać słów sugerujących tekst, litery, logotypy.
-- Bądź zwięzły (1-2 zdania).
+    prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI. 
+    
+KRYTYCZNE ZASADY - BEZWZGLĘDNIE PRZESTRZEGAJ:
+1. Prompt MUSI być w języku angielskim
+2. NIGDY nie używaj słów związanych z tekstem: NIE WOLNO użyć słów takich jak: text, words, letters, typography, caption, title, label, sign, signage, writing, inscription, message, document, paper, book, magazine, poster, banner
+3. NIE opisuj konceptów abstrakcyjnych przez tekst - zamiast "hints at science" użyj konkretnych obiektów wizualnych
+4. Zamiast abstrakcyjnych konceptów używaj konkretnych przedmiotów/scen
+
+WYMAGANE ELEMENTY:
+- Rozpocznij od: "photorealistic 4:3 horizontal composition"
+- Dodaj: "sharp focus, soft natural lighting"  
+- Opisz KONKRETNĄ scenę lub obiekty (nie abstrakcje)
+- Zakończ: "no text, no letters, no writing"
+
+PRZYKŁADY DOBRYCH PROMPTÓW:
+- Zamiast "hints at skincare science" → "laboratory glass bottles with serums, fresh aloe vera leaves"
+- Zamiast "suggesting healthy lifestyle" → "fresh vegetables, running shoes, water bottle"
+- Zamiast "representing business growth" → "ascending graph made of stacked coins, green plants growing"
 
 Temat artykułu: "{article_title}"
-Wygeneruj tylko prompt."""
+
+Wygeneruj TYLKO prompt (2-4 zdania). Pamiętaj o formacie 4:3 i zakazie tekstu!"""
     return call_gpt5_nano(api_key, prompt).strip()
 
-def generate_image_gemini(api_key, image_prompt):
+def generate_image_gemini(api_key, image_prompt, aspect_ratio="4:3"):
     """
     Generuje obrazek używając nowego API Google Gemini 2.5 Flash Image Preview.
     
     Args:
         api_key: Klucz API Google
         image_prompt: Tekstowy prompt opisujący obrazek do wygenerowania
+        aspect_ratio: Format obrazka (domyślnie "4:3" poziomy)
         
     Returns:
         tuple: (image_bytes, error_message)
@@ -238,6 +253,14 @@ def generate_image_gemini(api_key, image_prompt):
             - error_message: Opis błędu jeśli wystąpił, None jeśli sukces
     """
     try:
+        # Upewniamy się, że prompt zawiera informację o formacie
+        if aspect_ratio not in image_prompt:
+            image_prompt = f"{aspect_ratio} aspect ratio, {image_prompt}"
+        
+        # Dodajemy dodatkowe zabezpieczenie przed tekstem
+        if "no text" not in image_prompt.lower():
+            image_prompt += ", no text, no letters, no writing, no typography"
+        
         # Inicjalizacja klienta z nowym API
         client = genai.Client(api_key=api_key)
         
@@ -271,7 +294,7 @@ def generate_image_gemini(api_key, image_prompt):
         # Ogólny błąd
         return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
 
-def generate_brief_and_image(openai_api_key, google_api_key, topic):
+def generate_brief_and_image(openai_api_key, google_api_key, topic, aspect_ratio="4:3"):
     """
     Generuje brief artykułu oraz obrazek wyróżniający.
     """
@@ -299,8 +322,8 @@ Wygeneruj brief JSON dla tematu: "{topic}" """
         st.info(f"Generowanie obrazka dla: {brief_data['temat_artykulu']}...")
         st.caption(f"Prompt obrazka: {image_prompt}")
         
-        # Generowanie obrazka z nowym API
-        image_bytes, image_error = generate_image_gemini(google_api_key, image_prompt)
+        # Generowanie obrazka z nowym API i wybranym formatem
+        image_bytes, image_error = generate_image_gemini(google_api_key, image_prompt, aspect_ratio)
         
         if image_error:
             st.warning(f"Problem z generowaniem obrazka: {image_error}")
@@ -460,18 +483,31 @@ elif st.session_state.menu_choice == "Generator Briefów":
     else:
         topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
         
+        # Opcje generowania obrazków
+        with st.expander("⚙️ Ustawienia generowania obrazków", expanded=False):
+            col_img1, col_img2 = st.columns(2)
+            aspect_ratio = col_img1.selectbox(
+                "Format obrazka",
+                options=["4:3", "16:9", "1:1", "3:2"],
+                index=0,
+                help="4:3 i 16:9 to formaty poziome, 1:1 to kwadrat"
+            )
+            col_img2.info(f"Wybrany format: **{aspect_ratio}** {'(poziomy)' if aspect_ratio in ['4:3', '16:9', '3:2'] else '(kwadrat)' if aspect_ratio == '1:1' else ''}")
+        
         # Opcja testowania samego generowania obrazków
         with st.expander("🧪 Testuj generowanie obrazków"):
             test_prompt = st.text_input("Testowy prompt dla obrazka", 
-                value="photorealistic image of modern office workspace with laptop, coffee cup, soft light, sharp focus")
+                value=f"photorealistic {aspect_ratio} horizontal composition, modern office workspace with laptop and coffee cup, soft natural lighting, no text, no letters, no writing")
             if st.button("Testuj generowanie obrazka"):
                 with st.spinner("Generowanie testowego obrazka..."):
-                    test_image_bytes, test_error = generate_image_gemini(google_api_key, test_prompt)
+                    test_image_bytes, test_error = generate_image_gemini(google_api_key, test_prompt, aspect_ratio)
                     if test_error:
                         st.error(f"Błąd: {test_error}")
                     elif test_image_bytes:
                         st.success("Obrazek wygenerowany pomyślnie!")
                         st.image(test_image_bytes, caption="Testowy obrazek")
+                        # Wyświetl użyty prompt
+                        st.code(test_prompt, language="text")
                     else:
                         st.warning("Nie otrzymano obrazka ani błędu - sprawdź konfigurację API")
         
@@ -489,16 +525,17 @@ elif st.session_state.menu_choice == "Generator Briefów":
                     for i, topic in enumerate(topics):
                         st.info(f"Przetwarzanie: {topic}")
                         
-                        # Generowanie briefu i obrazka
+                        # Generowanie briefu i obrazka z wybranym formatem
                         topic_result, brief_data, image_bytes, image_error = generate_brief_and_image(
-                            openai_api_key, google_api_key, topic
+                            openai_api_key, google_api_key, topic, aspect_ratio
                         )
                         
                         st.session_state.generated_briefs.append({
                             "topic": topic_result, 
                             "brief": brief_data, 
                             "image": image_bytes, 
-                            "image_error": image_error
+                            "image_error": image_error,
+                            "aspect_ratio": aspect_ratio
                         })
                         
                         completed_count += 1
@@ -530,7 +567,7 @@ elif st.session_state.menu_choice == "Generator Briefów":
                     col1.json(item['brief'])
 
                 # Obrazek w prawej kolumnie
-                col2.subheader("🖼️ Obrazek wyróżniający")
+                col2.subheader(f"🖼️ Obrazek wyróżniający ({item.get('aspect_ratio', '4:3')})")
                 if item['image_error']:
                     col2.warning("Nie udało się wygenerować obrazka")
                     with col2.expander("Szczegóły błędu"):
