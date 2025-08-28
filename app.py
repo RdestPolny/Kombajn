@@ -408,6 +408,17 @@ with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
             export_data['personas'].append({'name': name, 'description': description})
         st.download_button(label="Pobierz konfigurację", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
 
+
+# --- NAPRAWIONA SEKCJA: KONTROLER PRZEKIEROWAŃ ---
+# Ten blok sprawdza "flagę" ustawioną po zakończeniu generowania treści.
+# Jeśli flaga jest ustawiona, zmienia widok na harmonogram i resetuje flagę.
+# To bezpieczny sposób na nawigację w Streamlit.
+if st.session_state.get('redirect_to_scheduler', False):
+    st.session_state.redirect_to_scheduler = False  # Zresetuj flagę, aby uniknąć pętli
+    st.session_state.menu_choice = "Harmonogram Publikacji"
+    # Nie ma potrzeby st.rerun() tutaj, skrypt naturalnie przejdzie do właściwej sekcji po zakończeniu tego przebiegu
+
+
 # --- GŁÓWNA LOGIKA WYŚWIETLANIA STRON ---
 
 if st.session_state.menu_choice == "Zarządzanie Stronami":
@@ -660,7 +671,12 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                             completed_count += 1
                                             progress_bar.progress(completed_count / len(tasks_to_run), text=f"Ukończono {completed_count}/{len(tasks_to_run)}...")
                                 st.success("Generowanie artykułów zakończone!")
-                                st.session_state.menu_choice = "Harmonogram Publikacji"
+                                
+                                # --- NAPRAWIONA SEKCJA ---
+                                # Zamiast bezpośrednio modyfikować menu_choice, ustawiamy flagę
+                                # i wywołujemy rerun, aby kontroler na górze strony mógł
+                                # bezpiecznie zmienić widok.
+                                st.session_state.redirect_to_scheduler = True
                                 st.rerun()
 
 elif st.session_state.menu_choice == "Zarządzanie Personami":
