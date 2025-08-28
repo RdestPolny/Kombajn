@@ -9,7 +9,8 @@ import os
 from cryptography.fernet import Fernet
 import base64
 import google.generativeai as genai
-from google.generativeai import types
+# Usunięto import 'types', ponieważ go nie używamy w wersji ultra-kompatybilnej
+# from google.generativeai import types 
 import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
@@ -229,35 +230,27 @@ Wygeneruj tylko prompt."""
         return f"Photorealistic image representing the topic: {article_title}, sharp focus, soft light, no text, no logos"
 
 def generate_image_gemini(api_key, image_prompt):
+    """
+    WERSJA OSTATECZNA "BAREBONES": Działa na BARDZO starych wersjach biblioteki.
+    Usuwa WSZYSTKIE obiekty konfiguracyjne, aby uniknąć błędów AttributeError.
+    WADA: Nie można kontrolować filtrów bezpieczeństwa API.
+    """
     try:
         genai.configure(api_key=api_key)
+        
         model = genai.GenerativeModel(model_name="gemini-2.5-flash-image-preview")
 
-        safety_settings = [
-            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
-            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
-            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
-        ]
+        response = model.generate_content(image_prompt)
 
-        response = model.generate_content(
-            contents=image_prompt,
-            safety_settings=safety_settings
-        )
-
-        # Scenariusz 1: Sukces - szukamy danych obrazu
         if response.candidates:
             for part in response.candidates[0].content.parts:
                 if part.inline_data is not None:
-                    return part.inline_data.data, None  # Zwracamy obraz i brak błędu
+                    return part.inline_data.data, None
 
-        # Scenariusz 2: Brak obrazu - coś poszło nie tak.
-        # Zamiast zgadywać, zwracamy całą odpowiedź API jako błąd do analizy.
         error_details = f"API nie zwróciło obrazu. Surowa odpowiedź do analizy:\n\n{str(response)}"
         return None, error_details
 
     except Exception as e:
-        # Scenariusz 3: Błąd krytyczny (np. zły klucz, błąd sieci)
         return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
 
 def generate_brief_and_image(openai_api_key, google_api_key, topic):
@@ -432,7 +425,6 @@ elif st.session_state.menu_choice == "Generator Briefów":
                 with st.spinner(f"Generowanie {len(topics)} briefów i obrazków..."):
                     progress_bar = st.progress(0, text="Oczekiwanie na wyniki...")
                     completed_count = 0
-                    # Zmniejszamy liczbę jednoczesnych zapytań, aby uniknąć błędów rate limit na planie płatnym
                     with ThreadPoolExecutor(max_workers=5) as executor:
                         futures = {executor.submit(generate_brief_and_image, openai_api_key, google_api_key, topic): topic for topic in topics}
                         for future in as_completed(futures):
@@ -461,11 +453,12 @@ elif st.session_state.menu_choice == "Generator Briefów":
                     col1.json(item['brief'])
 
                 if item['image_error']:
-                    col2.error(item['image_error'])
+                    col2.error("Nie udało się wygenerować obrazka. Sprawdź odpowiedź API poniżej.")
+                    col2.text_area("Surowa odpowiedź API:", value=item['image_error'], height=250, disabled=True)
                 elif item['image']:
                     col2.image(item['image'], caption="Wygenerowany obrazek wyróżniający")
                 else:
-                    col2.warning("Nie udało się wygenerować obrazka dla tego briefu.")
+                    col2.warning("Nie udało się wygenerować obrazka (brak błędu i brak obrazu).")
 
 
 elif st.session_state.menu_choice == "Generowanie Treści":
