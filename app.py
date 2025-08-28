@@ -231,12 +231,22 @@ Wygeneruj tylko prompt."""
 def generate_image_gemini(api_key, image_prompt):
     try:
         genai.configure(api_key=api_key)
+        client = genai.Client()
 
-        # Używamy starszego, bardziej kompatybilnego interfejsu GenerativeModel
-        model = genai.GenerativeModel(model_name="gemini-2.5-flash-image-preview")
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(text=image_prompt),
+                ],
+            ),
+        ]
 
-        generate_content_config = types.GenerateContentConfig(
-            response_modalities=["IMAGE", "TEXT"],
+        generation_config = types.GenerateContentConfig(
+            response_modalities=[
+                "IMAGE",
+                "TEXT",
+            ],
         )
         
         safety_settings=[
@@ -246,10 +256,10 @@ def generate_image_gemini(api_key, image_prompt):
             types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
         ]
 
-        # Konfiguracja jest przekazywana bezpośrednio do metody generate_content
-        response = model.generate_content(
-            contents=image_prompt,
-            generation_config=generate_content_config,
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-image-preview",
+            contents=contents,
+            generation_config=generation_config,
             safety_settings=safety_settings
         )
 
@@ -267,7 +277,6 @@ def generate_image_gemini(api_key, image_prompt):
 
     except Exception as e:
         return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
-
 
 def generate_brief_and_image(openai_api_key, google_api_key, topic):
     try:
@@ -298,7 +307,7 @@ Słowa kluczowe: {", ".join(keywords)}
 Treść artykułu (fragment):
 {article_content[:2500]}
 
-Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (max 60 znaków, angażujący, z główną frazą na początku) i "meta_description" (max 155 znaków, zachęcający do kliknięcia, z call-to-action i słowami kluczowymi)."""
+Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (max 60 znaków, angażający, z główną frazą na początku) i "meta_description" (max 155 znaków, zachęcający do kliknięcia, z call-to-action i słowami kluczowymi)."""
         json_string = call_gpt5_nano(api_key, prompt).strip().replace("```json", "").replace("```", "")
         return json.loads(json_string)
     except Exception as e:
