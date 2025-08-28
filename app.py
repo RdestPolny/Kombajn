@@ -215,8 +215,7 @@ def generate_article_dispatcher(model, api_key, title, prompt):
         return title, f"**BŁĄD KRYTYCZNY podczas generowania artykułu:** {str(e)}"
 
 def generate_image_prompt_gpt5(api_key, article_title):
-    try:
-        prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI. Prompt musi opisywać FOTOGRAFICZNY, realistyczny obraz, który wizualnie reprezentuje temat artykułu. Zasady:
+    prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI. Prompt musi opisywać FOTOGRAFICZNY, realistyczny obraz, który wizualnie reprezentuje temat artykułu. Zasady:
 - Prompt musi być w języku angielskim.
 - Musi zawierać: "photorealistic", "sharp focus", "soft light".
 - NIE MOŻE zawierać słów sugerujących tekst, litery, logotypy.
@@ -224,22 +223,12 @@ def generate_image_prompt_gpt5(api_key, article_title):
 
 Temat artykułu: "{article_title}"
 Wygeneruj tylko prompt."""
-        return call_gpt5_nano(api_key, prompt).strip()
-    except Exception as e:
-        st.warning(f"Błąd generowania promptu do obrazka przez GPT-5: {e}. Używam promptu zapasowego.")
-        return f"Photorealistic image representing the topic: {article_title}, sharp focus, soft light, no text, no logos"
+    return call_gpt5_nano(api_key, prompt).strip()
 
 def generate_image_gemini(api_key, image_prompt):
-    """
-    WERSJA OSTATECZNA "BAREBONES": Działa na BARDZO starych wersjach biblioteki.
-    Usuwa WSZYSTKIE obiekty konfiguracyjne, aby uniknąć błędów AttributeError.
-    WADA: Nie można kontrolować filtrów bezpieczeństwa API.
-    """
     try:
         genai.configure(api_key=api_key)
-        
         model = genai.GenerativeModel(model_name="gemini-2.5-flash-image-preview")
-
         response = model.generate_content(image_prompt)
 
         if response.candidates:
@@ -249,7 +238,6 @@ def generate_image_gemini(api_key, image_prompt):
 
         error_details = f"API nie zwróciło obrazu. Surowa odpowiedź do analizy:\n\n{str(response)}"
         return None, error_details
-
     except Exception as e:
         return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
 
@@ -266,13 +254,16 @@ Brief musi być w formacie JSON i zawierać klucze:
 Wygeneruj brief JSON dla tematu: "{topic}" """
         json_string = call_gpt5_nano(openai_api_key, brief_prompt).strip().replace("```json", "").replace("```", "")
         brief_data = json.loads(json_string)
+    except Exception as e:
+        return topic, {"error": f"Błąd krytyczny podczas generowania briefu: {str(e)}"}, None, None
 
+    try:
         image_prompt = generate_image_prompt_gpt5(openai_api_key, brief_data['temat_artykulu'])
         image_bytes, image_error = generate_image_gemini(google_api_key, image_prompt)
-        
         return topic, brief_data, image_bytes, image_error
     except Exception as e:
-        return topic, {"error": f"Błąd generowania briefu: {str(e)}"}, None, None
+        error_message = f"Błąd podczas generowania promptu do obrazka przez GPT-5: {e}"
+        return topic, brief_data, None, error_message
 
 def generate_meta_tags_gpt5(api_key, article_title, article_content, keywords):
     try:
