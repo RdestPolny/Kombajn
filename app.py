@@ -231,7 +231,6 @@ Wygeneruj tylko prompt."""
 def generate_image_gemini(api_key, image_prompt):
     try:
         genai.configure(api_key=api_key)
-        
         model = genai.GenerativeModel(model_name="gemini-2.5-flash-image-preview")
 
         safety_settings = [
@@ -246,23 +245,19 @@ def generate_image_gemini(api_key, image_prompt):
             safety_settings=safety_settings
         )
 
-        if not response.candidates:
-            block_reason = response.prompt_feedback.block_reason
-            return None, f"Prompt został zablokowany przez API. Powód: {block_reason.name if block_reason else 'Nieznany'}"
+        # Scenariusz 1: Sukces - szukamy danych obrazu
+        if response.candidates:
+            for part in response.candidates[0].content.parts:
+                if part.inline_data is not None:
+                    return part.inline_data.data, None  # Zwracamy obraz i brak błędu
 
-        failure_reason = None
-        for part in response.candidates[0].content.parts:
-            if part.inline_data is not None:
-                return part.inline_data.data, None
-            if part.text is not None:
-                failure_reason = part.text
-
-        if failure_reason:
-            return None, f"Model odmówił wygenerowania obrazu. Powód: '{failure_reason}'"
-        else:
-            return None, f"Model nie zwrócił danych obrazu. Sprawdź prompt: '{image_prompt}'"
+        # Scenariusz 2: Brak obrazu - coś poszło nie tak.
+        # Zamiast zgadywać, zwracamy całą odpowiedź API jako błąd do analizy.
+        error_details = f"API nie zwróciło obrazu. Surowa odpowiedź do analizy:\n\n{str(response)}"
+        return None, error_details
 
     except Exception as e:
+        # Scenariusz 3: Błąd krytyczny (np. zły klucz, błąd sieci)
         return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
 
 def generate_brief_and_image(openai_api_key, google_api_key, topic):
