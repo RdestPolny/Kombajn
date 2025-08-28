@@ -229,17 +229,26 @@ Wygeneruj tylko prompt."""
         return f"Photorealistic image representing the topic: {article_title}, sharp focus, soft light, no text, no logos"
 
 def generate_image_gemini(api_key, image_prompt):
-    """
-    WERSJA ULTRA-KOMPATYBILNA: Działa na bardzo starych wersjach biblioteki google-generativeai.
-    Usuwa wszystkie zaawansowane konfiguracje (safety_settings, generation_config),
-    które powodowały błędy.
-    """
     try:
         genai.configure(api_key=api_key)
         
         model = genai.GenerativeModel(model_name="gemini-2.5-flash-image-preview")
 
-        response = model.generate_content(image_prompt)
+        safety_settings = [
+            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+        ]
+
+        response = model.generate_content(
+            contents=image_prompt,
+            safety_settings=safety_settings
+        )
+
+        if not response.candidates:
+            block_reason = response.prompt_feedback.block_reason
+            return None, f"Prompt został zablokowany przez API. Powód: {block_reason.name if block_reason else 'Nieznany'}"
 
         failure_reason = None
         for part in response.candidates[0].content.parts:
@@ -285,7 +294,7 @@ Słowa kluczowe: {", ".join(keywords)}
 Treść artykułu (fragment):
 {article_content[:2500]}
 
-Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (max 60 znaków, angażający, z główną frazą na początku) i "meta_description" (max 155 znaków, zachęcający do kliknięcia, z call-to-action i słowami kluczowymi)."""
+Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (max 60 znaków, angażujący, z główną frazą na początku) i "meta_description" (max 155 znaków, zachęcający do kliknięcia, z call-to-action i słowami kluczowymi)."""
         json_string = call_gpt5_nano(api_key, prompt).strip().replace("```json", "").replace("```", "")
         return json.loads(json_string)
     except Exception as e:
@@ -428,7 +437,8 @@ elif st.session_state.menu_choice == "Generator Briefów":
                 with st.spinner(f"Generowanie {len(topics)} briefów i obrazków..."):
                     progress_bar = st.progress(0, text="Oczekiwanie na wyniki...")
                     completed_count = 0
-                    with ThreadPoolExecutor(max_workers=10) as executor:
+                    # Zmniejszamy liczbę jednoczesnych zapytań, aby uniknąć błędów rate limit na planie płatnym
+                    with ThreadPoolExecutor(max_workers=5) as executor:
                         futures = {executor.submit(generate_brief_and_image, openai_api_key, google_api_key, topic): topic for topic in topics}
                         for future in as_completed(futures):
                             topic, brief_data, image_bytes, image_error = future.result()
@@ -515,7 +525,7 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                 with st.spinner(f"Generowanie {len(tasks_to_run)} artykułów..."):
                                     progress_bar = st.progress(0, text=f"Ukończono 0/{len(tasks_to_run)}...")
                                     completed_count = 0
-                                    with ThreadPoolExecutor(max_workers=10) as executor:
+                                    with ThreadPoolExecutor(max_workers=5) as executor:
                                         future_to_task = {executor.submit(generate_article_dispatcher, selected_model, openai_api_key, task['title'], task['prompt']): task for task in tasks_to_run}
                                         for future in as_completed(future_to_task):
                                             task = future_to_task[future]
