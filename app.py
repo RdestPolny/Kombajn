@@ -8,9 +8,8 @@ import json
 import os
 from cryptography.fernet import Fernet
 import base64
-import google.generativeai as genai
-# Usunięto import 'types', ponieważ go nie używamy w wersji ultra-kompatybilnej
-# from google.generativeai import types 
+# Nowy import dla Google Gemini
+from google import genai
 import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
@@ -226,23 +225,58 @@ Wygeneruj tylko prompt."""
     return call_gpt5_nano(api_key, prompt).strip()
 
 def generate_image_gemini(api_key, image_prompt):
+    """
+    Generuje obrazek używając nowego API Google Gemini 2.5 Flash Image Preview.
+    
+    Args:
+        api_key: Klucz API Google
+        image_prompt: Tekstowy prompt opisujący obrazek do wygenerowania
+        
+    Returns:
+        tuple: (image_bytes, error_message)
+            - image_bytes: Bajty obrazka PNG jeśli sukces, None jeśli błąd
+            - error_message: Opis błędu jeśli wystąpił, None jeśli sukces
+    """
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name="gemini-2.5-flash-image-preview")
-        response = model.generate_content(image_prompt)
-
+        # Inicjalizacja klienta z nowym API
+        client = genai.Client(api_key=api_key)
+        
+        # Generowanie obrazka
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-image-preview",
+            contents=[image_prompt]  # Tylko prompt tekstowy, bez obrazka wejściowego
+        )
+        
+        # Sprawdzanie czy odpowiedź zawiera wygenerowany obrazek
         if response.candidates:
             for part in response.candidates[0].content.parts:
                 if part.inline_data is not None:
+                    # Zwracamy surowe bajty obrazka
                     return part.inline_data.data, None
-
-        error_details = f"API nie zwróciło obrazu. Surowa odpowiedź do analizy:\n\n{str(response)}"
+        
+        # Jeśli nie znaleziono obrazka w odpowiedzi
+        error_details = f"API nie zwróciło obrazka. Sprawdź czy prompt jest odpowiedni.\n\nPrompt: {image_prompt}"
+        
+        # Dodatkowe informacje diagnostyczne jeśli dostępne
+        if hasattr(response, 'text') and response.text:
+            error_details += f"\n\nOdpowiedź tekstowa: {response.text}"
+            
         return None, error_details
+        
+    except AttributeError as e:
+        # Błąd związany z nieprawidłowym API lub brakiem atrybutów
+        return None, f"Błąd API: Model może nie być dostępny lub API się zmieniło. Szczegóły: {e}"
+    
     except Exception as e:
+        # Ogólny błąd
         return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
 
 def generate_brief_and_image(openai_api_key, google_api_key, topic):
+    """
+    Generuje brief artykułu oraz obrazek wyróżniający.
+    """
     try:
+        # Generowanie briefu
         brief_prompt = f"""Jesteś strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na temat: "{topic}".
 Brief musi być w formacie JSON i zawierać klucze:
 - "temat_artykulu": Dokładny, angażujący tytuł.
@@ -258,11 +292,26 @@ Wygeneruj brief JSON dla tematu: "{topic}" """
         return topic, {"error": f"Błąd krytyczny podczas generowania briefu: {str(e)}"}, None, None
 
     try:
+        # Generowanie promptu dla obrazka
         image_prompt = generate_image_prompt_gpt5(openai_api_key, brief_data['temat_artykulu'])
+        
+        # Dodajemy informację o generowaniu obrazka
+        st.info(f"Generowanie obrazka dla: {brief_data['temat_artykulu']}...")
+        st.caption(f"Prompt obrazka: {image_prompt}")
+        
+        # Generowanie obrazka z nowym API
         image_bytes, image_error = generate_image_gemini(google_api_key, image_prompt)
+        
+        if image_error:
+            st.warning(f"Problem z generowaniem obrazka: {image_error}")
+        elif image_bytes:
+            st.success("Obrazek wygenerowany pomyślnie!")
+            
         return topic, brief_data, image_bytes, image_error
+        
     except Exception as e:
-        error_message = f"Błąd podczas generowania promptu do obrazka przez GPT-5: {e}"
+        error_message = f"Błąd podczas generowania promptu/obrazka: {e}"
+        st.error(error_message)
         return topic, brief_data, None, error_message
 
 def generate_meta_tags_gpt5(api_key, article_title, article_content, keywords):
@@ -404,53 +453,104 @@ elif st.session_state.menu_choice == "Dashboard":
 
 elif st.session_state.menu_choice == "Generator Briefów":
     st.header("📝 Generator Briefów z GPT-5 Nano")
-    st.info("Krok 1: Wpisz tematy artykułów (każdy w nowej linii). Aplikacja wygeneruje dla nich szczegółowe briefy oraz obrazki wyróżniające.")
-    if not openai_api_key or not google_api_key: st.error("Wprowadź klucz OpenAI API oraz Google AI API w panelu bocznym, aby kontynuować.")
+    st.info("Krok 1: Wpisz tematy artykułów (każdy w nowej linii). Aplikacja wygeneruje dla nich szczegółowe briefy oraz obrazki wyróżniające przy użyciu Gemini 2.5 Flash Image Preview.")
+    
+    if not openai_api_key or not google_api_key: 
+        st.error("Wprowadź klucz OpenAI API oraz Google AI API w panelu bocznym, aby kontynuować.")
     else:
         topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
+        
+        # Opcja testowania samego generowania obrazków
+        with st.expander("🧪 Testuj generowanie obrazków"):
+            test_prompt = st.text_input("Testowy prompt dla obrazka", 
+                value="photorealistic image of modern office workspace with laptop, coffee cup, soft light, sharp focus")
+            if st.button("Testuj generowanie obrazka"):
+                with st.spinner("Generowanie testowego obrazka..."):
+                    test_image_bytes, test_error = generate_image_gemini(google_api_key, test_prompt)
+                    if test_error:
+                        st.error(f"Błąd: {test_error}")
+                    elif test_image_bytes:
+                        st.success("Obrazek wygenerowany pomyślnie!")
+                        st.image(test_image_bytes, caption="Testowy obrazek")
+                    else:
+                        st.warning("Nie otrzymano obrazka ani błędu - sprawdź konfigurację API")
+        
         if st.button("Generuj briefy i obrazki", type="primary"):
             topics = [topic.strip() for topic in topics_input.split('\n') if topic.strip()]
-            if not topics: st.error("Wpisz przynajmniej jeden temat.")
+            if not topics: 
+                st.error("Wpisz przynajmniej jeden temat.")
             else:
                 st.session_state.generated_briefs = []
                 with st.spinner(f"Generowanie {len(topics)} briefów i obrazków..."):
                     progress_bar = st.progress(0, text="Oczekiwanie na wyniki...")
                     completed_count = 0
-                    with ThreadPoolExecutor(max_workers=5) as executor:
-                        futures = {executor.submit(generate_brief_and_image, openai_api_key, google_api_key, topic): topic for topic in topics}
-                        for future in as_completed(futures):
-                            topic, brief_data, image_bytes, image_error = future.result()
-                            st.session_state.generated_briefs.append({
-                                "topic": topic, 
-                                "brief": brief_data, 
-                                "image": image_bytes, 
-                                "image_error": image_error
-                            })
-                            completed_count += 1
-                            progress_bar.progress(completed_count / len(topics), text=f"Ukończono {completed_count}/{len(topics)}...")
+                    
+                    # Sekwencyjne generowanie dla lepszej kontroli błędów
+                    for i, topic in enumerate(topics):
+                        st.info(f"Przetwarzanie: {topic}")
+                        
+                        # Generowanie briefu i obrazka
+                        topic_result, brief_data, image_bytes, image_error = generate_brief_and_image(
+                            openai_api_key, google_api_key, topic
+                        )
+                        
+                        st.session_state.generated_briefs.append({
+                            "topic": topic_result, 
+                            "brief": brief_data, 
+                            "image": image_bytes, 
+                            "image_error": image_error
+                        })
+                        
+                        completed_count += 1
+                        progress_bar.progress(completed_count / len(topics), 
+                                            text=f"Ukończono {completed_count}/{len(topics)}...")
+                    
                 st.success("Generowanie briefów zakończone!")
+                
     if st.session_state.generated_briefs:
         st.subheader("Wygenerowane Briefy")
+        
+        # Statystyki
+        successful_images = sum(1 for b in st.session_state.generated_briefs if b['image'] is not None)
+        st.metric("Wygenerowane obrazki", f"{successful_images}/{len(st.session_state.generated_briefs)}")
+        
         if st.button("Przejdź do generowania artykułów z tych briefów"):
             st.session_state.menu_choice = "Generowanie Treści"
             st.rerun()
+            
         for i, item in enumerate(st.session_state.generated_briefs):
-            with st.expander(f"**{i+1}. {item['brief'].get('temat_artykulu', item['topic'])}**"):
+            with st.expander(f"**{i+1}. {item['brief'].get('temat_artykulu', item['topic'])}**", expanded=False):
                 col1, col2 = st.columns(2)
                 
+                # Brief w lewej kolumnie
                 if 'error' in item['brief']:
                     col1.error(f"Błąd generowania briefu: {item['brief']['error']}")
                 else:
+                    col1.subheader("📋 Brief")
                     col1.json(item['brief'])
 
+                # Obrazek w prawej kolumnie
+                col2.subheader("🖼️ Obrazek wyróżniający")
                 if item['image_error']:
-                    col2.error("Nie udało się wygenerować obrazka. Sprawdź odpowiedź API poniżej.")
-                    col2.text_area("Surowa odpowiedź API:", value=item['image_error'], height=250, disabled=True)
+                    col2.warning("Nie udało się wygenerować obrazka")
+                    with col2.expander("Szczegóły błędu"):
+                        st.code(item['image_error'], language="text")
                 elif item['image']:
-                    col2.image(item['image'], caption="Wygenerowany obrazek wyróżniający")
+                    try:
+                        # Wyświetlanie obrazka
+                        col2.image(item['image'], caption="Wygenerowany obrazek wyróżniający", use_column_width=True)
+                        
+                        # Opcja pobrania obrazka
+                        col2.download_button(
+                            label="📥 Pobierz obrazek",
+                            data=item['image'],
+                            file_name=f"featured_image_{i+1}.png",
+                            mime="image/png"
+                        )
+                    except Exception as e:
+                        col2.error(f"Błąd wyświetlania obrazka: {e}")
                 else:
-                    col2.warning("Nie udało się wygenerować obrazka (brak błędu i brak obrazu).")
-
+                    col2.info("Obrazek nie został wygenerowany")
 
 elif st.session_state.menu_choice == "Generowanie Treści":
     st.header("🤖 Generator Treści AI")
@@ -476,11 +576,19 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                 else:
                     df['Zaznacz'] = False
                     df['Temat'] = df['brief'].apply(lambda x: x.get('temat_artykulu', x.get('topic', 'Brak tytułu')))
+                    df['Ma obrazek'] = df['image'].apply(lambda x: "✅" if x else "❌")
                     df['Brief'] = df['brief'].apply(lambda x: json.dumps(x, ensure_ascii=False, indent=2))
                     
                     with st.form("article_generation_form"):
                         st.subheader("Wybierz briefy do przetworzenia")
-                        edited_df = st.data_editor(df[['Zaznacz', 'Temat', 'Brief']], hide_index=True, use_container_width=True)
+                        edited_df = st.data_editor(
+                            df[['Zaznacz', 'Temat', 'Ma obrazek', 'Brief']], 
+                            hide_index=True, 
+                            use_container_width=True,
+                            column_config={
+                                "Ma obrazek": st.column_config.TextColumn("Obrazek", width="small")
+                            }
+                        )
                         submitted = st.form_submit_button("Generuj zaznaczone artykuły", type="primary")
                         if submitted:
                             selected_briefs = edited_df[edited_df.Zaznacz]
@@ -550,7 +658,7 @@ elif st.session_state.menu_choice == "Zarządzanie Personami":
 
 elif st.session_state.menu_choice == "Harmonogram Publikacji":
     st.header("🗓️ Harmonogram Publikacji")
-    st.info("Krok 3: Wybierz artykuły, ustawienia publikacji i zaplanuj je z rozłożeniem w czasie.")
+    st.info("Krok 3: Wybierz artykuły, ustawienia publikacji i zaplanuj je z rozłożeniem w czasie. Obrazki wyróżniające zostaną automatycznie dodane do wpisów.")
     if not st.session_state.generated_articles:
         st.warning("Brak wygenerowanych artykułów. Przejdź do 'Generator Briefów', a następnie 'Generowanie Treści'.")
     else:
@@ -560,10 +668,22 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
         else:
             df = pd.DataFrame(st.session_state.generated_articles)
             df['Zaznacz'] = True
+            df['Ma obrazek'] = df['image'].apply(lambda x: "✅" if x else "❌")
+            
             with st.form("bulk_schedule_form"):
                 st.subheader("1. Wybierz artykuły do publikacji")
-                edited_df = st.data_editor(df[['Zaznacz', 'title', 'meta_title', 'meta_description']], hide_index=True, use_container_width=True,
-                                           column_config={"title": "Tytuł Artykułu", "meta_title": "Meta Tytuł", "meta_description": "Meta Opis"})
+                edited_df = st.data_editor(
+                    df[['Zaznacz', 'title', 'Ma obrazek', 'meta_title', 'meta_description']], 
+                    hide_index=True, 
+                    use_container_width=True,
+                    column_config={
+                        "title": "Tytuł Artykułu", 
+                        "Ma obrazek": st.column_config.TextColumn("Obrazek", width="small"),
+                        "meta_title": "Meta Tytuł", 
+                        "meta_description": "Meta Opis"
+                    }
+                )
+                
                 st.subheader("2. Ustawienia publikacji")
                 col_pub1, col_pub2 = st.columns(2)
                 selected_sites_names = col_pub1.multiselect("Wybierz strony docelowe", options=site_options.keys())
@@ -607,7 +727,10 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                                         
                                         target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
                                         
-                                        st.info(f"Planowanie '{row['title']}' na {site_name} na dzień {current_publish_time.strftime('%Y-%m-%d %H:%M')}...")
+                                        # Informacja o obrazku
+                                        image_status = " (z obrazkiem)" if full_article_data.get('image') else " (bez obrazka)"
+                                        st.info(f"Planowanie '{row['title']}'{image_status} na {site_name} na dzień {current_publish_time.strftime('%Y-%m-%d %H:%M')}...")
+                                        
                                         success, message, _ = api.publish_post(
                                             row['title'], full_article_data['content'], "future", current_publish_time.isoformat(),
                                             target_category_ids, target_tags, author_id=int(author_id) if author_id else None,
