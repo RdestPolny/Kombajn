@@ -176,7 +176,7 @@ Kluczowe zagadnienia do poruszenia:
 
 # STYL I TON
 - **Doświadczenie (Experience):** Wplataj w treść zwroty wskazujące na osobiste doświadczenie, np. "Z mojego doświadczenia...", "Częstym błędem, który obserwuję, jest...".
-- **Ekspertyza (Expertise):** Używaj precyzyjnej terminologii.
+- **Ekspertyza (Expertise):** Używaj precyzzyjnej terminologii.
 - **Autorytatywność (Authoritativeness):** Pisz w sposób pewny i zdecydowany.
 - **Zaufanie (Trustworthiness):** Bądź transparentny. Jeśli produkt lub metoda ma wady, wspomnij o nich.
 
@@ -230,23 +230,34 @@ Wygeneruj tylko prompt."""
 
 def generate_image_gemini(api_key, image_prompt):
     try:
-        # Konfigurujemy klucz globalnie. genai.Client() znajdzie go w zmiennych środowiskowych.
         genai.configure(api_key=api_key) 
         client = genai.Client()
         
         response = client.models.generate_content(
             model="gemini-2.5-flash-image-preview",
-            contents=[image_prompt], # Przekazujemy tylko tekstowy prompt
+            contents=[image_prompt],
         )
         
+        # Przeszukaj odpowiedź w poszukiwaniu danych obrazu LUB tekstowego wyjaśnienia
+        failure_reason = None
         for part in response.candidates[0].content.parts:
+            # Scenariusz 1: Sukces, znaleziono obraz
             if part.inline_data is not None:
-                return part.inline_data.data # Zwracamy surowe bajty obrazu
-                
-        st.error("Model Gemini nie zwrócił danych obrazu w odpowiedzi.")
+                return part.inline_data.data
+            # Scenariusz 2: Znaleziono tekst, prawdopodobnie powód odmowy
+            if part.text is not None:
+                failure_reason = part.text
+
+        # Jeśli pętla się zakończyła i nie znaleziono obrazu, wyświetl błąd
+        if failure_reason:
+            st.error(f"Model Gemini odmówił wygenerowania obrazu. Powód: '{failure_reason}'")
+        else:
+            st.error(f"Model Gemini nie zwrócił danych obrazu w odpowiedzi (brak konkretnego błędu). Sprawdź, czy prompt jest poprawny: '{image_prompt}'")
         return None
+
     except Exception as e:
-        st.error(f"Błąd generowania obrazu (gemini-2.5-flash-image-preview): {e}")
+        # Scenariusz 3: Błąd krytyczny (np. zły klucz API, błąd sieci)
+        st.error(f"Krytyczny błąd podczas komunikacji z API Gemini: {e}")
         return None
 
 def generate_brief_and_image(openai_api_key, google_api_key, topic):
@@ -441,7 +452,7 @@ elif st.session_state.menu_choice == "Generator Briefów":
                 if item['image']:
                     col2.image(item['image'], caption="Wygenerowany obrazek wyróżniający")
                 else:
-                    col2.warning("Nie udało się wygenerować obrazka.")
+                    col2.warning("Nie udało się wygenerować obrazka dla tego briefu.")
 
 elif st.session_state.menu_choice == "Generowanie Treści":
     st.header("🤖 Generator Treści AI")
