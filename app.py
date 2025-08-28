@@ -168,7 +168,7 @@ MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
 # GRUPA DOCELOWA
 Artykuł jest skierowany do {{GRUPA_DOCELOWA}}. Używaj języka, który jest dla nich zrozumiały, ale nie unikaj terminologii branżowej – wyjaśniaj ją w prosty sposób.
 
-# STRUKTURA I GŁĘBIA
+# STRUKTURĘ I GŁĘBIA
 **Zasada Odwróconej Piramidy (Answer-First Lead):** Rozpocznij artykuł naturalnie, ale wpleć w pierwszy akapit (lead) bezpośrednią i zwięzłą odpowiedź na główne pytanie z tematu. Unikaj wstępów typu "W tym artykule dowiesz się...", "Oto odpowiedź na Twoje pytanie:". Czytelnik musi otrzymać kluczową wartość od razu, w sposób płynny i angażujący.
 Artykuł musi mieć logiczną strukturę. Rozwiń temat w kilku kluczowych sekcjach, a zakończ praktycznym podsumowaniem.
 Kluczowe zagadnienia do poruszenia:
@@ -355,14 +355,25 @@ Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (m
 # --- INTERFEJS UŻYTKOWNIKA (STREAMLIT) ---
 
 st.set_page_config(layout="wide", page_title="PBN Manager")
+
+# --- POCZĄTEK NAPRAWIONEJ SEKCJI ---
+# Inicjalizacja stanu sesji musi być na samym początku
+if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Zarządzanie Stronami"
+if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
+if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
+
+# Kontroler przekierowań - uruchamiany PRZED renderowaniem jakichkolwiek widgetów
+# Sprawdza flagę, zmienia stan i natychmiastowo odświeża stronę.
+if st.session_state.get('redirect_to_scheduler', False):
+    st.session_state.redirect_to_scheduler = False  # Zresetuj flagę
+    st.session_state.menu_choice = "Harmonogram Publikacji"
+    st.rerun()
+# --- KONIEC NAPRAWIONEJ SEKCJI ---
+
 st.title("🚀 PBN Manager")
 st.caption("Centralne zarządzanie i generowanie treści dla Twojej sieci blogów.")
 
 conn = get_db_connection()
-
-if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Zarządzanie Stronami"
-if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
-if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
 
 st.sidebar.header("Menu Główne")
 menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "Dashboard"]
@@ -407,17 +418,6 @@ with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
         for name, description in personas_for_export:
             export_data['personas'].append({'name': name, 'description': description})
         st.download_button(label="Pobierz konfigurację", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
-
-
-# --- NAPRAWIONA SEKCJA: KONTROLER PRZEKIEROWAŃ ---
-# Ten blok sprawdza "flagę" ustawioną po zakończeniu generowania treści.
-# Jeśli flaga jest ustawiona, zmienia widok na harmonogram i resetuje flagę.
-# To bezpieczny sposób na nawigację w Streamlit.
-if st.session_state.get('redirect_to_scheduler', False):
-    st.session_state.redirect_to_scheduler = False  # Zresetuj flagę, aby uniknąć pętli
-    st.session_state.menu_choice = "Harmonogram Publikacji"
-    # Nie ma potrzeby st.rerun() tutaj, skrypt naturalnie przejdzie do właściwej sekcji po zakończeniu tego przebiegu
-
 
 # --- GŁÓWNA LOGIKA WYŚWIETLANIA STRON ---
 
@@ -672,10 +672,8 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                             progress_bar.progress(completed_count / len(tasks_to_run), text=f"Ukończono {completed_count}/{len(tasks_to_run)}...")
                                 st.success("Generowanie artykułów zakończone!")
                                 
-                                # --- NAPRAWIONA SEKCJA ---
-                                # Zamiast bezpośrednio modyfikować menu_choice, ustawiamy flagę
-                                # i wywołujemy rerun, aby kontroler na górze strony mógł
-                                # bezpiecznie zmienić widok.
+                                # Ta sekcja pozostaje bez zmian. Ustawia flagę i wywołuje rerun.
+                                # Kontroler na górze strony przechwyci to w następnym przebiegu.
                                 st.session_state.redirect_to_scheduler = True
                                 st.rerun()
 
@@ -733,123 +731,4 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                         "title": "Tytuł Artykułu", 
                         "Ma obrazek": st.column_config.TextColumn("Obrazek", width="small"),
                         "meta_title": "Meta Tytuł", 
-                        "meta_description": "Meta Opis"
-                    }
-                )
-                
-                st.subheader("2. Ustawienia publikacji")
-                col_pub1, col_pub2 = st.columns(2)
-                selected_sites_names = col_pub1.multiselect("Wybierz strony docelowe", options=site_options.keys())
-                author_id = col_pub2.number_input("ID Autora (opcjonalnie)", min_value=1, step=1, help="Jeśli puste, użyty zostanie autor z danych logowania.")
-                
-                category_source_site = st.selectbox("Pobierz kategorie ze strony:", options=site_options.keys())
-                available_categories = {}
-                if category_source_site:
-                    source_site_data = site_options[category_source_site]
-                    source_api = WordPressAPI(source_site_data[2], source_site_data[3], decrypt_data(source_site_data[4]))
-                    available_categories = source_api.get_categories()
-                selected_categories = st.multiselect("Wybierz kategorie", options=available_categories.keys())
-                
-                tags_str = st.text_input("Tagi (wspólne dla wszystkich, oddzielone przecinkami)")
-                
-                st.subheader("3. Planowanie w czasie (Staggering)")
-                col_date1, col_date2, col_date3 = st.columns(3)
-                start_date = col_date1.date_input("Data publikacji pierwszego artykułu", datetime.now())
-                start_time = col_date2.time_input("Godzina publikacji pierwszego artykułu", datetime.now().time())
-                interval_hours = col_date3.number_input("Odstęp między publikacjami (w godzinach)", min_value=1, value=8)
-                
-                submitted = st.form_submit_button("Zaplanuj zaznaczone artykuły", type="primary")
-                if submitted:
-                    selected_articles = edited_df[edited_df.Zaznacz]
-                    if selected_articles.empty or not selected_sites_names:
-                        st.error("Zaznacz przynajmniej jeden artykuł i jedną stronę docelową.")
-                    else:
-                        current_publish_time = datetime.combine(start_date, start_time)
-                        with st.spinner("Planowanie publikacji..."):
-                            for index, row in selected_articles.iterrows():
-                                if index < len(st.session_state.generated_articles):
-                                    full_article_data = st.session_state.generated_articles[index]
-                                    for site_name in selected_sites_names:
-                                        site_info = site_options[site_name]
-                                        url, username, encrypted_pass = site_info[2], site_info[3], site_info[4]
-                                        password = decrypt_data(encrypted_pass)
-                                        api = WordPressAPI(url, username, password)
-                                        
-                                        site_categories = api.get_categories()
-                                        target_category_ids = [site_categories[name] for name in selected_categories if name in site_categories]
-                                        
-                                        target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
-                                        
-                                        # Informacja o obrazku
-                                        image_status = " (z obrazkiem)" if full_article_data.get('image') else " (bez obrazka)"
-                                        st.info(f"Planowanie '{row['title']}'{image_status} na {site_name} na dzień {current_publish_time.strftime('%Y-%m-%d %H:%M')}...")
-                                        
-                                        success, message, _ = api.publish_post(
-                                            row['title'], full_article_data['content'], "future", current_publish_time.isoformat(),
-                                            target_category_ids, target_tags, author_id=int(author_id) if author_id else None,
-                                            featured_image_bytes=full_article_data.get('image'),
-                                            meta_title=row['meta_title'], meta_description=row['meta_description']
-                                        )
-                                        if success: st.success(f"[{site_name}]: {message}")
-                                        else: st.error(f"[{site_name}]: {message}")
-                                    current_publish_time += timedelta(hours=interval_hours)
-                        st.success("Zakończono planowanie wszystkich zaznaczonych artykułów!")
-
-elif st.session_state.menu_choice == "Zarządzanie Treścią":
-    st.header("Zarządzanie Treścią i Masowa Edycja")
-    sites = db_execute(conn, "SELECT id, name, url, username, app_password FROM sites", fetch="all")
-    site_options = {site[1]: site for site in sites}
-    if not site_options: st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
-    else:
-        selected_site_name = st.selectbox("Wybierz stronę do edycji", options=site_options.keys())
-        if selected_site_name:
-            site_id, name, url, username, encrypted_pass = site_options[selected_site_name]
-            password = decrypt_data(encrypted_pass)
-            st.subheader(f"Wpisy na stronie: {name}")
-            @st.cache_data(ttl=300)
-            def get_site_data(_url, _username, _password):
-                api_instance = WordPressAPI(_url, _username, _password)
-                posts = api_instance.get_posts()
-                categories = api_instance.get_categories()
-                all_users = api_instance.get_users()
-                return posts, categories, all_users
-            
-            with st.spinner(f"Pobieranie danych ze strony {name}..."):
-                posts, categories, all_users = get_site_data(url, username, password)
-            
-            users_from_posts = {post['author_name']: post['author_id'] for post in posts if post.get('author_name') != 'N/A'} if posts else {}
-            final_users_map = {**all_users, **users_from_posts}
-            if not posts: st.info("Nie znaleziono wpisów na tej stronie lub wystąpił błąd połączenia.")
-            else:
-                df = pd.DataFrame(posts).rename(columns={'author_name': 'author'})
-                df['Zaznacz'] = False
-                st.info("Zaznacz wpisy, które chcesz edytować, a następnie użyj formularza masowej edycji poniżej.")
-                edited_df = st.data_editor(df[['Zaznacz', 'id', 'title', 'date', 'author', 'categories']], column_config={"Zaznacz": st.column_config.CheckboxColumn(required=True)},
-                                           disabled=["id", "title", "date", "author", "categories"], hide_index=True, use_container_width=True)
-                selected_posts = edited_df[edited_df.Zaznacz]
-                if not selected_posts.empty:
-                    st.subheader(f"Masowa edycja dla {len(selected_posts)} zaznaczonych wpisów")
-                    with st.form("bulk_edit_form"):
-                        api = WordPressAPI(url, username, password)
-                        new_category_names = st.multiselect("Zastąp kategorie", options=categories.keys())
-                        new_author_name = st.selectbox("Zmień autora", options=[None] + sorted(list(final_users_map.keys())))
-                        submitted = st.form_submit_button("Wykonaj masową edycję")
-                        if submitted:
-                            if not new_category_names and not new_author_name: st.error("Wybierz przynajmniej jedną akcję do wykonania.")
-                            else:
-                                update_data = {}
-                                if new_category_names: update_data['categories'] = [categories[name] for name in new_category_names]
-                                if new_author_name: update_data['author'] = final_users_map[new_author_name]
-                                with st.spinner("Aktualizowanie wpisów..."):
-                                    progress_bar = st.progress(0)
-                                    total_selected = len(selected_posts)
-                                    for i, post_id in enumerate(selected_posts['id']):
-                                        success, message = api.update_post(post_id, update_data)
-                                        if success: st.success(message)
-                                        else: st.error(message)
-                                        progress_bar.progress((i + 1) / total_selected)
-                                st.info("Proces zakończony. Odśwież dane, aby zobaczyć zmiany.")
-                                st.cache_data.clear()
-                                st.rerun()
-                else:
-                    st.caption("Zaznacz przynajmniej jeden wpis, aby aktywować panel masowej edycji.")
+     
