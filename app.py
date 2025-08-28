@@ -315,16 +315,51 @@ def generate_brief_and_image(openai_api_key, google_api_key, topic, aspect_ratio
     Generuje brief artykułu oraz obrazek wyróżniający.
     """
     try:
-        # Generowanie briefu
-        brief_prompt = f"""Jesteś strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na temat: "{topic}".
-Brief musi być w formacie JSON i zawierać klucze:
-- "temat_artykulu": Dokładny, angażujący tytuł.
-- "grupa_docelowa": Krótki opis, dla kogo jest artykuł.
-- "zagadnienia_kluczowe": Array 3-5 głównych sekcji (nagłówków H2).
-- "slowa_kluczowe": Array 5-10 głównych słów kluczowych.
-- "dodatkowe_slowa_semantyczne": Array 5-10 fraz i kolokacji semantycznie wspierających główny temat.
+        # --- POCZĄTEK ZMIAN ---
+        # Używamy nowego, bardziej zaawansowanego promptu
+        brief_prompt = f"""
+Jesteś światowej klasy strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na podstawie podanego tematu.
 
-Wygeneruj brief JSON dla tematu: "{topic}" """
+# KROK 1: ANALIZA TEMATU
+Przeanalizuj podany temat: "{topic}" pod kątem jego złożoności i intencji wyszukiwania. Określ, czy temat jest:
+- **SZEROKI**: Wymaga wyczerpującego, długiego artykułu, który pełni rolę kompleksowego poradnika (np. 'pillar page'). Odpowiada na wiele powiązanych pytań.
+- **WĄSKI**: Odpowiada na jedno, bardzo konkretne pytanie. Wymaga krótszego, zwięzłego i precyzyjnego artykułu, który szybko dostarcza odpowiedź.
+
+PRZYKŁADY TEMATÓW SZEROKICH:
+- "Lwia zmarszczka - kompletny poradnik po pielęgnacji i zabiegach korygujących"
+- "SPF - opis, działanie, poradnik pielęgnacji i rodzaje"
+- "The Ordinary Retinol 1% in Squalane - recenzja"
+
+PRZYKŁADY TEMATÓW WĄSKICH:
+- "Czy dwudziestolatki mogą mieć zmarszczki?"
+- "Ile trzyma pierwszy botoks?"
+
+# KROK 2: TWORZENIE BRIEFU W FORMACIE JSON
+Na podstawie analizy z Kroku 1, stwórz brief w formacie JSON.
+
+**KRYTYCZNA ZASADA: Wartość klucza `temat_artykulu` MUSI być DOKŁADNIE taka sama jak temat podany przez użytkownika. NIE ZMIENIAJ, NIE POPRAWIAJ, NIE SKRACAJ ani NIE WYDŁUŻAJ tytułu.**
+
+Struktura JSON:
+{{
+  "temat_artykulu": "{topic}",
+  "analiza_tematu": "Krótki opis, czy temat jest szeroki czy wąski i dlaczego.",
+  "grupa_docelowa": "Krótki opis, dla kogo jest artykuł.",
+  "zagadnienia_kluczowe": [
+      // Dla tematów SZEROKICH: 5-7 rozbudowanych nagłówków (H2), które kompleksowo pokrywają temat.
+      // Dla tematów WĄSKICH: 2-4 zwięzłe nagłówki (H2), które bezpośrednio odpowiadają na pytanie.
+  ],
+  "slowa_kluczowe": [
+      // Array 5-10 głównych słów kluczowych.
+  ],
+  "dodatkowe_slowa_semantyczne": [
+      // Array 5-10 fraz i kolokacji semantycznie wspierających główny temat.
+  ]
+}}
+
+Wygeneruj wyłącznie kompletny i poprawny brief w formacie JSON dla tematu: "{topic}"
+"""
+        # --- KONIEC ZMIAN ---
+        
         json_string = call_gpt5_nano(openai_api_key, brief_prompt).strip().replace("```json", "").replace("```", "")
         brief_data = json.loads(json_string)
     except Exception as e:
