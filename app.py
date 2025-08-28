@@ -9,6 +9,7 @@ import os
 from cryptography.fernet import Fernet
 import base64
 import google.generativeai as genai
+from google.generativeai import types
 import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
@@ -17,7 +18,6 @@ from PIL import Image
 
 # --- KONFIGURACJA I INICJALIZACJA ---
 
-# Klucz do szyfrowania jest generowany na podstawie seeda. Ważne, aby był stały.
 SECRET_KEY_SEED = "twoj-bardzo-dlugi-i-tajny-klucz-do-szyfrowania-konfiguracji"
 KEY = base64.urlsafe_b64encode(SECRET_KEY_SEED.encode().ljust(32)[:32])
 FERNET = Fernet(KEY)
@@ -176,7 +176,7 @@ Kluczowe zagadnienia do poruszenia:
 
 # STYL I TON
 - **Doświadczenie (Experience):** Wplataj w treść zwroty wskazujące na osobiste doświadczenie, np. "Z mojego doświadczenia...", "Częstym błędem, który obserwuję, jest...".
-- **Ekspertyza (Expertise):** Używaj precyzzyjnej terminologii.
+- **Ekspertyza (Expertise):** Używaj precyzyjnej terminologii.
 - **Autorytatywność (Authoritativeness):** Pisz w sposób pewny i zdecydowany.
 - **Zaufanie (Trustworthiness):** Bądź transparentny. Jeśli produkt lub metoda ma wady, wspomnij o nich.
 
@@ -230,33 +230,54 @@ Wygeneruj tylko prompt."""
 
 def generate_image_gemini(api_key, image_prompt):
     try:
-        genai.configure(api_key=api_key) 
+        genai.configure(api_key=api_key)
         client = genai.Client()
-        
+
+        # KROK 1: Stworzenie formalnej struktury zapytania (lepsza praktyka)
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(text=image_prompt),
+                ],
+            ),
+        ]
+
+        # KROK 2: Zdefiniowanie konfiguracji generowania, w tym wyłączenie restrykcyjnych filtrów
+        generate_content_config = types.GenerateContentConfig(
+            response_modalities=[
+                "IMAGE",
+                "TEXT",
+            ],
+            safety_settings=[
+                types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+            ],
+        )
+
+        # KROK 3: Wywołanie API z nową, szczegółową konfiguracją
         response = client.models.generate_content(
             model="gemini-2.5-flash-image-preview",
-            contents=[image_prompt],
+            contents=contents,
+            generation_config=generate_content_config,
         )
-        
-        # Przeszukaj odpowiedź w poszukiwaniu danych obrazu LUB tekstowego wyjaśnienia
+
         failure_reason = None
         for part in response.candidates[0].content.parts:
-            # Scenariusz 1: Sukces, znaleziono obraz
             if part.inline_data is not None:
                 return part.inline_data.data
-            # Scenariusz 2: Znaleziono tekst, prawdopodobnie powód odmowy
             if part.text is not None:
                 failure_reason = part.text
 
-        # Jeśli pętla się zakończyła i nie znaleziono obrazu, wyświetl błąd
         if failure_reason:
             st.error(f"Model Gemini odmówił wygenerowania obrazu. Powód: '{failure_reason}'")
         else:
-            st.error(f"Model Gemini nie zwrócił danych obrazu w odpowiedzi (brak konkretnego błędu). Sprawdź, czy prompt jest poprawny: '{image_prompt}'")
+            st.error(f"Model Gemini nie zwrócił danych obrazu w odpowiedzi. Sprawdź, czy prompt jest poprawny: '{image_prompt}'")
         return None
 
     except Exception as e:
-        # Scenariusz 3: Błąd krytyczny (np. zły klucz API, błąd sieci)
         st.error(f"Krytyczny błąd podczas komunikacji z API Gemini: {e}")
         return None
 
