@@ -120,31 +120,23 @@ class WordPressAPI:
                 final_posts.append({"id": p['id'], "title": p['title']['rendered'], "date": datetime.fromisoformat(p['date']).strftime('%Y-%m-%d %H:%M'), "author_name": author_map.get(p['author'], 'N/A'), "author_id": p['author'], "categories": ", ".join(filter(None, [category_map.get(cid, '') for cid in p['categories']]))})
             return final_posts
 
-    # --- POCZĄTEK NAPRAWIONEJ SEKCJI ---
     def upload_image_from_bytes(self, image_bytes, filename):
         try:
-            # ZMIANA: Używamy parametru 'files' zamiast 'data'.
-            # 'requests' automatycznie zbuduje poprawne zapytanie multipart/form-data.
-            # Klucz 'file' jest tym, czego oczekuje WordPress API.
-            # Podajemy krotkę (nazwa_pliku, dane_binarne, typ_mime) dla pełnej kompatybilności.
             files = {'file': (filename, image_bytes, 'image/png')}
-
             upload_response = requests.post(
                 f"{self.base_url}/media",
                 files=files,
                 auth=self.auth,
-                timeout=30  # Zwiększamy timeout na wypadek wolniejszego uploadu
+                timeout=30
             )
             upload_response.raise_for_status()
             return upload_response.json().get('id')
         except requests.exceptions.HTTPError as e:
-            # Dodajemy bardziej szczegółowe logowanie błędu, aby zobaczyć odpowiedź serwera
             st.warning(f"Nie udało się wgrać obrazka '{filename}'. Błąd HTTP ({e.response.status_code}): {e.response.text}")
             return None
         except Exception as e:
             st.warning(f"Nie udało się wgrać obrazka z bajtów: {filename}. Błąd ogólny: {e}")
             return None
-    # --- KONIEC NAPRAWIONEJ SEKCJI ---
 
     def update_post(self, post_id, data):
         try:
@@ -178,8 +170,15 @@ class WordPressAPI:
 # --- LOGIKA GENEROWANIA TREŚCI ---
 HTML_RULES = "Zasady formatowania HTML:\n- NIE UŻYWAJ <h1>.\n- UŻYWAJ WYŁĄCZNIE: <h2>, <h3>, <p>, <b>, <strong>, <ul>, <ol>, <li>, <table>, <tr>, <th>, <td>."
 SYSTEM_PROMPT_BASE = f"Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim.\n{HTML_RULES}"
+
+# --- ZMIANA: NOWY MASTER PROMPT TEMPLATE ---
 MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
 {{PERSONA_DESCRIPTION}} Twoim celem jest napisanie wyczerpującego, wiarygodnego i praktycznego artykułu na temat "{{TEMAT_ARTYKULU}}", który demonstruje głęboką wiedzę (Ekspertyza), autentyczne doświadczenie (Doświadczenie), jest autorytatywny w tonie (Autorytatywność) i buduje zaufanie czytelnika (Zaufanie).
+
+# ZŁOŻONOŚĆ I DŁUGOŚĆ ARTYKUŁU
+Na podstawie wstępnej analizy, temat "{{TEMAT_ARTYKULU}}" został sklasyfikowany jako temat {{ANALIZA_TEMATU}}.
+- Jeśli temat jest **SZEROKI**, napisz wyczerpujący, szczegółowy i długi artykuł (w stylu 'pillar page'), który dogłębnie omawia każde z podanych zagadnień kluczowych.
+- Jeśli temat jest **WĄSKI**, napisz zwięzły, konkretny i krótszy artykuł, który szybko i precyzyjnie odpowiada na główne pytanie zawarte w tytule, rozwijając wprost podane zagadnienia.
 
 # GRUPA DOCELOWA
 Artykuł jest skierowany do {{GRUPA_DOCELOWA}}. Używaj języka, który jest dla nich zrozumiały, ale nie unikaj terminologii branżowej – wyjaśniaj ją w prosty sposób.
@@ -203,7 +202,26 @@ Dodatkowo, wpleć w treść poniższe frazy semantyczne, aby zwiększyć głębi
 # FORMATOWANIE
 Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym. Używaj pogrubień (<b> lub <strong>), aby wyróżnić kluczowe terminy i najważniejsze informacje, co ułatwia skanowanie tekstu. Jeśli dane można przedstawić w formie porównania lub kroków, rozważ użycie prostej tabeli (<table>) dla lepszej czytelności."""
 
-def call_gpt5_nano(api_key, prompt):
+# --- ZMIANA: NOWA, UPROSZCZONA FUNKCJA GENEROWANIA ARTYKUŁU ---
+def generate_article_task(api_key, model, title, prompt):
+    """Generuje kompletny artykuł w jednym zapytaniu do API."""
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_BASE},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        content = response.choices[0].message.content
+        return title, content.strip()
+    except Exception as e:
+        st.error(f"Błąd API podczas generowania '{title}': {e}")
+        return title, f"**BŁĄD KRYTYCZNY podczas generowania artykułu:** {str(e)}"
+
+# --- ZMIANA: Funkcja call_gpt5_nano jest teraz używana tylko do briefu i meta, więc ją zostawiamy, ale upraszczamy ---
+def call_gpt5_nano_simple(api_key, prompt):
     client = openai.OpenAI(api_key=api_key)
     response = client.chat.completions.create(
         model="gpt-5-nano",
@@ -211,23 +229,6 @@ def call_gpt5_nano(api_key, prompt):
     )
     return response.choices[0].message.content
 
-def generate_article_two_parts(api_key, title, prompt):
-    part1_prompt = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\n{prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu w połowie tekstu."
-    part1_text = call_gpt5_nano(api_key, part1_prompt)
-
-    part2_prompt = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nOto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie od miejsca, w którym przerwano. Nie dodawaj wstępów typu 'Oto kontynuacja' ani nie powtarzaj tytułu.\n\nOryginalne wytyczne do artykułu:\n{prompt}\n\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"
-    part2_text = call_gpt5_nano(api_key, part2_prompt)
-    
-    return title, part1_text.strip() + "\n\n" + part2_text.strip()
-
-def generate_article_dispatcher(model, api_key, title, prompt):
-    try:
-        if model == "gpt-5-nano":
-            return generate_article_two_parts(api_key, title, prompt)
-        else:
-            return title, f"**BŁĄD: Nieobsługiwany model '{model}'**"
-    except Exception as e:
-        return title, f"**BŁĄD KRYTYCZNY podczas generowania artykułu:** {str(e)}"
 
 def generate_image_prompt_gpt5(api_key, article_title):
     prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI. 
@@ -252,62 +253,37 @@ PRZYKŁADY DOBRYCH PROMPTÓW:
 Temat artykułu: "{article_title}"
 
 Wygeneruj TYLKO prompt (1-2 zdania). Pamiętaj o formacie 4:3 i zakazie tekstu!"""
-    return call_gpt5_nano(api_key, prompt).strip()
+    return call_gpt5_nano_simple(api_key, prompt).strip()
 
 def generate_image_gemini(api_key, image_prompt, aspect_ratio="4:3"):
     """
     Generuje obrazek używając nowego API Google Gemini 2.5 Flash Image Preview.
-    
-    Args:
-        api_key: Klucz API Google
-        image_prompt: Tekstowy prompt opisujący obrazek do wygenerowania
-        aspect_ratio: Format obrazka (domyślnie "4:3" poziomy)
-        
-    Returns:
-        tuple: (image_bytes, error_message)
-            - image_bytes: Bajty obrazka PNG jeśli sukces, None jeśli błąd
-            - error_message: Opis błędu jeśli wystąpił, None jeśli sukces
     """
     try:
-        # Upewniamy się, że prompt zawiera informację o formacie
         if aspect_ratio not in image_prompt:
             image_prompt = f"{aspect_ratio} aspect ratio, {image_prompt}"
-        
-        # Dodajemy dodatkowe zabezpieczenie przed tekstem
         if "no text" not in image_prompt.lower():
             image_prompt += ", no text, no letters, no writing, no typography"
         
-        # Inicjalizacja klienta z nowym API
         client = genai.Client(api_key=api_key)
-        
-        # Generowanie obrazka
         response = client.models.generate_content(
             model="gemini-2.5-flash-image-preview",
-            contents=[image_prompt]  # Tylko prompt tekstowy, bez obrazka wejściowego
+            contents=[image_prompt]
         )
         
-        # Sprawdzanie czy odpowiedź zawiera wygenerowany obrazek
         if response.candidates:
             for part in response.candidates[0].content.parts:
                 if part.inline_data is not None:
-                    # Zwracamy surowe bajty obrazka
                     return part.inline_data.data, None
         
-        # Jeśli nie znaleziono obrazka w odpowiedzi
         error_details = f"API nie zwróciło obrazka. Sprawdź czy prompt jest odpowiedni.\n\nPrompt: {image_prompt}"
-        
-        # Dodatkowe informacje diagnostyczne jeśli dostępne
         if hasattr(response, 'text') and response.text:
             error_details += f"\n\nOdpowiedź tekstowa: {response.text}"
-            
         return None, error_details
         
     except AttributeError as e:
-        # Błąd związany z nieprawidłowym API lub brakiem atrybutów
         return None, f"Błąd API: Model może nie być dostępny lub API się zmieniło. Szczegóły: {e}"
-    
     except Exception as e:
-        # Ogólny błąd
         return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
 
 def generate_brief_and_image(openai_api_key, google_api_key, topic, aspect_ratio="4:3"):
@@ -315,8 +291,7 @@ def generate_brief_and_image(openai_api_key, google_api_key, topic, aspect_ratio
     Generuje brief artykułu oraz obrazek wyróżniający.
     """
     try:
-        # --- POCZĄTEK ZMIAN ---
-        # Używamy nowego, bardziej zaawansowanego promptu
+        # --- ZMIANA: NOWY, INTELIGENTNY PROMPT DO BRIEFU ---
         brief_prompt = f"""
 Jesteś światowej klasy strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na podstawie podanego tematu.
 
@@ -358,31 +333,21 @@ Struktura JSON:
 
 Wygeneruj wyłącznie kompletny i poprawny brief w formacie JSON dla tematu: "{topic}"
 """
-        # --- KONIEC ZMIAN ---
-        
-        json_string = call_gpt5_nano(openai_api_key, brief_prompt).strip().replace("```json", "").replace("```", "")
+        json_string = call_gpt5_nano_simple(openai_api_key, brief_prompt).strip().replace("```json", "").replace("```", "")
         brief_data = json.loads(json_string)
     except Exception as e:
         return topic, {"error": f"Błąd krytyczny podczas generowania briefu: {str(e)}"}, None, None
 
     try:
-        # Generowanie promptu dla obrazka
         image_prompt = generate_image_prompt_gpt5(openai_api_key, brief_data['temat_artykulu'])
-        
-        # Dodajemy informację o generowaniu obrazka
         st.info(f"Generowanie obrazka dla: {brief_data['temat_artykulu']}...")
         st.caption(f"Prompt obrazka: {image_prompt}")
-        
-        # Generowanie obrazka z nowym API i wybranym formatem
         image_bytes, image_error = generate_image_gemini(google_api_key, image_prompt, aspect_ratio)
-        
         if image_error:
             st.warning(f"Problem z generowaniem obrazka: {image_error}")
         elif image_bytes:
             st.success("Obrazek wygenerowany pomyślnie!")
-            
         return topic, brief_data, image_bytes, image_error
-        
     except Exception as e:
         error_message = f"Błąd podczas generowania promptu/obrazka: {e}"
         st.error(error_message)
@@ -397,7 +362,7 @@ Treść artykułu (fragment):
 {article_content[:2500]}
 
 Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (max 60 znaków, angażujący, z główną frazą na początku) i "meta_description" (max 155 znaków, zachęcający do kliknięcia, z call-to-action i słowami kluczowymi)."""
-        json_string = call_gpt5_nano(api_key, prompt).strip().replace("```json", "").replace("```", "")
+        json_string = call_gpt5_nano_simple(api_key, prompt).strip().replace("```json", "").replace("```", "")
         return json.loads(json_string)
     except Exception as e:
         st.warning(f"Błąd generowania meta tagów: {e}. Używam wartości domyślnych.")
@@ -407,12 +372,10 @@ Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (m
 
 st.set_page_config(layout="wide", page_title="PBN Manager")
 
-# Inicjalizacja stanu sesji musi być na samym początku
 if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Zarządzanie Stronami"
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
 
-# Kontroler przekierowań - uruchamiany PRZED renderowaniem jakichkolwiek widgetów
 if st.session_state.get('redirect_to_scheduler', False):
     st.session_state.redirect_to_scheduler = False
     st.session_state.menu_choice = "Harmonogram Publikacji"
@@ -541,8 +504,6 @@ elif st.session_state.menu_choice == "Generator Briefów":
         st.error("Wprowadź klucz OpenAI API oraz Google AI API w panelu bocznym, aby kontynuować.")
     else:
         topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
-        
-        # Opcje generowania obrazków
         with st.expander("⚙️ Ustawienia generowania obrazków", expanded=False):
             col_img1, col_img2 = st.columns(2)
             aspect_ratio = col_img1.selectbox(
@@ -553,7 +514,6 @@ elif st.session_state.menu_choice == "Generator Briefów":
             )
             col_img2.info(f"Wybrany format: **{aspect_ratio}** {'(poziomy)' if aspect_ratio in ['4:3', '16:9', '3:2'] else '(kwadrat)' if aspect_ratio == '1:1' else ''}")
         
-        # Opcja testowania samego generowania obrazków
         with st.expander("🧪 Testuj generowanie obrazków"):
             test_prompt = st.text_input("Testowy prompt dla obrazka", 
                 value=f"photorealistic {aspect_ratio} horizontal composition, modern office workspace with laptop and coffee cup, soft natural lighting, no text, no letters, no writing")
@@ -565,7 +525,6 @@ elif st.session_state.menu_choice == "Generator Briefów":
                     elif test_image_bytes:
                         st.success("Obrazek wygenerowany pomyślnie!")
                         st.image(test_image_bytes, caption="Testowy obrazek")
-                        # Wyświetl użyty prompt
                         st.code(test_prompt, language="text")
                     else:
                         st.warning("Nie otrzymano obrazka ani błędu - sprawdź konfigurację API")
@@ -579,16 +538,11 @@ elif st.session_state.menu_choice == "Generator Briefów":
                 with st.spinner(f"Generowanie {len(topics)} briefów i obrazków..."):
                     progress_bar = st.progress(0, text="Oczekiwanie na wyniki...")
                     completed_count = 0
-                    
-                    # Sekwencyjne generowanie dla lepszej kontroli błędów
                     for i, topic in enumerate(topics):
                         st.info(f"Przetwarzanie: {topic}")
-                        
-                        # Generowanie briefu i obrazka z wybranym formatem
                         topic_result, brief_data, image_bytes, image_error = generate_brief_and_image(
                             openai_api_key, google_api_key, topic, aspect_ratio
                         )
-                        
                         st.session_state.generated_briefs.append({
                             "topic": topic_result, 
                             "brief": brief_data, 
@@ -596,17 +550,13 @@ elif st.session_state.menu_choice == "Generator Briefów":
                             "image_error": image_error,
                             "aspect_ratio": aspect_ratio
                         })
-                        
                         completed_count += 1
                         progress_bar.progress(completed_count / len(topics), 
                                             text=f"Ukończono {completed_count}/{len(topics)}...")
-                    
                 st.success("Generowanie briefów zakończone!")
                 
     if st.session_state.generated_briefs:
         st.subheader("Wygenerowane Briefy")
-        
-        # Statystyki
         successful_images = sum(1 for b in st.session_state.generated_briefs if b['image'] is not None)
         st.metric("Wygenerowane obrazki", f"{successful_images}/{len(st.session_state.generated_briefs)}")
         
@@ -617,15 +567,11 @@ elif st.session_state.menu_choice == "Generator Briefów":
         for i, item in enumerate(st.session_state.generated_briefs):
             with st.expander(f"**{i+1}. {item['brief'].get('temat_artykulu', item['topic'])}**", expanded=False):
                 col1, col2 = st.columns(2)
-                
-                # Brief w lewej kolumnie
                 if 'error' in item['brief']:
                     col1.error(f"Błąd generowania briefu: {item['brief']['error']}")
                 else:
                     col1.subheader("📋 Brief")
                     col1.json(item['brief'])
-
-                # Obrazek w prawej kolumnie
                 col2.subheader(f"🖼️ Obrazek wyróżniający ({item.get('aspect_ratio', '4:3')})")
                 if item['image_error']:
                     col2.warning("Nie udało się wygenerować obrazka")
@@ -633,10 +579,7 @@ elif st.session_state.menu_choice == "Generator Briefów":
                         st.code(item['image_error'], language="text")
                 elif item['image']:
                     try:
-                        # Wyświetlanie obrazka
                         col2.image(item['image'], caption="Wygenerowany obrazek wyróżniający", use_column_width=True)
-                        
-                        # Opcja pobrania obrazka
                         col2.download_button(
                             label="📥 Pobierz obrazek",
                             data=item['image'],
@@ -665,11 +608,10 @@ elif st.session_state.menu_choice == "Generowanie Treści":
             if not openai_api_key: st.error("Wprowadź swój klucz OpenAI API w panelu bocznym.")
             else:
                 valid_briefs_for_articles = [b for b in st.session_state.generated_briefs if not b['brief'].get('error')]
-                
-                df = pd.DataFrame(valid_briefs_for_articles)
                 if not valid_briefs_for_articles:
                     st.warning("Brak poprawnie wygenerowanych briefów do przetworzenia.")
                 else:
+                    df = pd.DataFrame(valid_briefs_for_articles)
                     df['Zaznacz'] = False
                     df['Temat'] = df['brief'].apply(lambda x: x.get('temat_artykulu', x.get('topic', 'Brak tytułu')))
                     df['Ma obrazek'] = df['image'].apply(lambda x: "✅" if x else "❌")
@@ -681,11 +623,11 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                             df[['Zaznacz', 'Temat', 'Ma obrazek', 'Brief']], 
                             hide_index=True, 
                             use_container_width=True,
-                            column_config={
-                                "Ma obrazek": st.column_config.TextColumn("Obrazek", width="small")
-                            }
+                            column_config={"Ma obrazek": st.column_config.TextColumn("Obrazek", width="small")}
                         )
                         submitted = st.form_submit_button("Generuj zaznaczone artykuły", type="primary")
+                        
+                        # --- ZMIANA: NOWA LOGIKA GENEROWANIA Z BATCHINGIEM ---
                         if submitted:
                             selected_briefs = edited_df[edited_df.Zaznacz]
                             if selected_briefs.empty: st.error("Zaznacz przynajmniej jeden brief.")
@@ -697,29 +639,47 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                     
                                     final_prompt = MASTER_PROMPT_TEMPLATE.replace("{{PERSONA_DESCRIPTION}}", persona_map[selected_persona_name])
                                     final_prompt = final_prompt.replace("{{TEMAT_ARTYKULU}}", brief_data.get("temat_artykulu", row["Temat"]))
+                                    analiza = brief_data.get("analiza_tematu", "SZEROKI")
+                                    final_prompt = final_prompt.replace("{{ANALIZA_TEMATU}}", "SZEROKI" if "szeroki" in analiza.lower() else "WĄSKI")
                                     final_prompt = final_prompt.replace("{{GRUPA_DOCELOWA}}", brief_data.get("grupa_docelowa", ""))
                                     final_prompt = final_prompt.replace("{{SLOWA_KLUCZOWE}}", ", ".join(brief_data.get("slowa_kluczowe", [])))
                                     final_prompt = final_prompt.replace("{{DODATKOWE_SLOWA_SEMANTYCZNE}}", ", ".join(brief_data.get("dodatkowe_slowa_semantyczne", [])))
                                     zagadnienia_str = "\n".join([f"- {z}" for z in brief_data.get("zagadnienia_kluczowe", [])])
                                     final_prompt = final_prompt.replace("{{ZAGADNIENIA_KLUCZOWE}}", zagadnienia_str)
-                                    tasks_to_run.append({'title': brief_data.get("temat_artykulu", row["Temat"]), 'prompt': final_prompt, 'keywords': brief_data.get("slowa_kluczowe", []), 'image': original_brief_data['image']})
+                                    
+                                    tasks_to_run.append({
+                                        'title': brief_data.get("temat_artykulu", row["Temat"]),
+                                        'prompt': final_prompt,
+                                        'keywords': brief_data.get("slowa_kluczowe", []),
+                                        'image': original_brief_data['image']
+                                    })
                                 
                                 st.session_state.generated_articles = []
-                                with st.spinner(f"Generowanie {len(tasks_to_run)} artykułów..."):
-                                    progress_bar = st.progress(0, text=f"Ukończono 0/{len(tasks_to_run)}...")
-                                    completed_count = 0
-                                    with ThreadPoolExecutor(max_workers=5) as executor:
-                                        future_to_task = {executor.submit(generate_article_dispatcher, selected_model, openai_api_key, task['title'], task['prompt']): task for task in tasks_to_run}
-                                        for future in as_completed(future_to_task):
-                                            task = future_to_task[future]
-                                            title, content = future.result()
-                                            st.info(f"Generowanie meta tagów dla: {title}...")
-                                            meta_tags = generate_meta_tags_gpt5(openai_api_key, title, content, task['keywords'])
-                                            st.session_state.generated_articles.append({"title": title, "content": content, "image": task['image'], **meta_tags})
-                                            completed_count += 1
-                                            progress_bar.progress(completed_count / len(tasks_to_run), text=f"Ukończono {completed_count}/{len(tasks_to_run)}...")
-                                st.success("Generowanie artykułów zakończone!")
+                                BATCH_SIZE = 5
+                                tasks_batches = [tasks_to_run[i:i + BATCH_SIZE] for i in range(0, len(tasks_to_run), BATCH_SIZE)]
+                                total_tasks = len(tasks_to_run)
+                                completed_count = 0
+
+                                with st.spinner(f"Generowanie {total_tasks} artykułów w partiach po {BATCH_SIZE}..."):
+                                    progress_bar = st.progress(0, text=f"Ukończono 0/{total_tasks}...")
+                                    
+                                    for i, batch in enumerate(tasks_batches):
+                                        st.info(f"Przetwarzanie partii {i+1}/{len(tasks_batches)} (artykuły {i*BATCH_SIZE + 1} - {i*BATCH_SIZE + len(batch)})...")
+                                        with ThreadPoolExecutor(max_workers=BATCH_SIZE) as executor:
+                                            future_to_task = {executor.submit(generate_article_task, openai_api_key, selected_model, task['title'], task['prompt']): task for task in batch}
+                                            
+                                            for future in as_completed(future_to_task):
+                                                task = future_to_task[future]
+                                                title, content = future.result()
+                                                
+                                                st.info(f"Generowanie meta tagów dla: {title}...")
+                                                meta_tags = generate_meta_tags_gpt5(openai_api_key, title, content, task['keywords'])
+                                                st.session_state.generated_articles.append({"title": title, "content": content, "image": task['image'], **meta_tags})
+
+                                                completed_count += 1
+                                                progress_bar.progress(completed_count / total_tasks, text=f"Ukończono {completed_count}/{total_tasks}...")
                                 
+                                st.success("Generowanie artykułów zakończone!")
                                 st.session_state.redirect_to_scheduler = True
                                 st.rerun()
 
@@ -821,10 +781,8 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                                         
                                         site_categories = api.get_categories()
                                         target_category_ids = [site_categories[name] for name in selected_categories if name in site_categories]
-                                        
                                         target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
                                         
-                                        # Informacja o obrazku
                                         image_status = " (z obrazkiem)" if full_article_data.get('image') else " (bez obrazka)"
                                         st.info(f"Planowanie '{row['title']}'{image_status} na {site_name} na dzień {current_publish_time.strftime('%Y-%m-%d %H:%M')}...")
                                         
