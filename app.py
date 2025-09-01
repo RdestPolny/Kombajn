@@ -3,18 +3,13 @@ import sqlite3
 import pandas as pd
 import requests
 from requests.auth import HTTPBasicAuth
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import json
-import os
 from cryptography.fernet import Fernet
 import base64
-# Nowy import dla Google Gemini
 from google import genai
 import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlparse
-import io
-from PIL import Image
 
 # --- KONFIGURACJA I INICJALIZACJA ---
 
@@ -38,7 +33,16 @@ def get_db_connection():
 
 def init_db(conn):
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY, name TEXT, url TEXT UNIQUE, username TEXT, app_password BLOB)")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sites (
+            id INTEGER PRIMARY KEY, 
+            name TEXT, 
+            url TEXT UNIQUE, 
+            username TEXT, 
+            app_password BLOB,
+            image_style_prompt TEXT
+        )
+    """)
     cursor.execute("CREATE TABLE IF NOT EXISTS personas (id INTEGER PRIMARY KEY, name TEXT UNIQUE, description TEXT)")
     conn.commit()
 
@@ -61,12 +65,13 @@ class WordPressAPI:
         try:
             response = requests.get(f"{self.base_url}/{endpoint}", params=params, auth=self.auth, timeout=15)
             response.raise_for_status()
-            return response.json()
+            return response.json(), response.headers
         except requests.exceptions.HTTPError as e:
-            if display_error: st.error(f"Błąd HTTP ({e.response.status_code}) przy '{endpoint}': {e.response.text}")
+            if display_error and e.response.status_code != 400: # Ignoruj błędy "no posts found"
+                 st.error(f"Błąd HTTP ({e.response.status_code}) przy '{endpoint}': {e.response.text}")
         except requests.exceptions.RequestException as e:
             if display_error: st.error(f"Błąd połączenia przy '{endpoint}': {e}")
-        return None
+        return None, {}
 
     def test_connection(self):
         try:
@@ -78,59 +83,49 @@ class WordPressAPI:
 
     def get_stats(self):
         try:
-            response = requests.get(f"{self.base_url}/posts", params={"per_page": 1}, auth=self.auth, timeout=10)
-            response.raise_for_status()
-            total_posts = int(response.headers.get('X-WP-Total', 0))
-            last_post_date = "Brak" if not response.json() else datetime.fromisoformat(response.json()[0]['date']).strftime('%Y-%m-%d %H:%M')
+            data, headers = self._make_request("posts", params={"per_page": 1})
+            total_posts = int(headers.get('X-WP-Total', 0))
+            last_post_date = "Brak" if not data else datetime.fromisoformat(data[0]['date']).strftime('%Y-%m-%d %H:%M')
             return {"total_posts": total_posts, "last_post_date": last_post_date}
         except Exception: return {"total_posts": "Błąd", "last_post_date": "Błąd"}
 
+    def get_all_posts_since(self, start_date):
+        all_posts = []
+        page = 1
+        while True:
+            params = {"per_page": 100, "page": page, "after": start_date.isoformat(), "orderby": "date", "order": "asc"}
+            posts_data, _ = self._make_request("posts", params=params, display_error=False)
+            if not posts_data: break
+            all_posts.extend(posts_data)
+            page += 1
+        return all_posts
+
     def get_categories(self):
-        data = self._make_request("categories", params={"per_page": 100})
+        data, _ = self._make_request("categories", params={"per_page": 100})
         return {cat['name']: cat['id'] for cat in data} if data else {}
 
     def get_users(self):
-        data = self._make_request("users", params={"per_page": 100, "roles": "administrator,editor,author"}, display_error=False)
+        data, _ = self._make_request("users", params={"per_page": 100, "roles": "administrator,editor,author"}, display_error=False)
         return {user['name']: user['id'] for user in data} if data else {}
 
     def get_posts(self, per_page=50):
-        posts_data = self._make_request("posts", params={"per_page": per_page, "orderby": "date", "_embed": True})
+        posts_data, _ = self._make_request("posts", params={"per_page": per_page, "orderby": "date", "_embed": True})
         if not posts_data: return []
-        is_embedded = '_embedded' in posts_data[0]
-        if is_embedded:
-            final_posts = []
-            for item in posts_data:
-                author_name = item['_embedded']['author'][0].get('name', 'N/A')
-                author_id = item['_embedded']['author'][0].get('id', 0)
-                categories = [t.get('name', '') for tl in item['_embedded'].get('wp:term', []) for t in tl if t.get('taxonomy') == 'category']
-                final_posts.append({"id": item['id'], "title": item['title']['rendered'], "date": datetime.fromisoformat(item['date']).strftime('%Y-%m-%d %H:%M'), "author_name": author_name, "author_id": author_id, "categories": ", ".join(filter(None, categories))})
-            return final_posts
-        else:
-            st.warning("Serwer nie zwrócił osadzonych danych. Dociąganie informacji...")
-            author_ids = {p['author'] for p in posts_data}
-            author_map = {}
-            for author_id in author_ids:
-                user_data = self._make_request(f"users/{author_id}", display_error=False)
-                if user_data:
-                    author_map[author_id] = user_data.get('name', 'N/A')
-            category_ids = {cid for p in posts_data for cid in p['categories']}
-            category_map = {cat['id']: cat['name'] for cat in self._make_request("categories", params={"include": ",".join(map(str, category_ids))}) or []}
-            final_posts = []
-            for p in posts_data:
-                final_posts.append({"id": p['id'], "title": p['title']['rendered'], "date": datetime.fromisoformat(p['date']).strftime('%Y-%m-%d %H:%M'), "author_name": author_map.get(p['author'], 'N/A'), "author_id": p['author'], "categories": ", ".join(filter(None, [category_map.get(cid, '') for cid in p['categories']]))})
-            return final_posts
+        if '_embedded' not in posts_data[0]: return [] # Fallback
+        
+        final_posts = []
+        for item in posts_data:
+            author_name = item['_embedded']['author'][0].get('name', 'N/A')
+            categories = [t.get('name', '') for tl in item['_embedded'].get('wp:term', []) for t in tl if t.get('taxonomy') == 'category']
+            final_posts.append({"id": item['id'], "title": item['title']['rendered'], "date": datetime.fromisoformat(item['date']).strftime('%Y-%m-%d %H:%M'), "author": author_name, "categories": ", ".join(filter(None, categories))})
+        return final_posts
 
     def upload_image_from_bytes(self, image_bytes, filename):
         try:
             files = {'file': (filename, image_bytes, 'image/png')}
-            upload_response = requests.post(
-                f"{self.base_url}/media",
-                files=files,
-                auth=self.auth,
-                timeout=30
-            )
-            upload_response.raise_for_status()
-            return upload_response.json().get('id')
+            response = requests.post(f"{self.base_url}/media", files=files, auth=self.auth, timeout=30)
+            response.raise_for_status()
+            return response.json().get('id')
         except requests.exceptions.HTTPError as e:
             st.warning(f"Nie udało się wgrać obrazka '{filename}'. Błąd HTTP ({e.response.status_code}): {e.response.text}")
             return None
@@ -148,18 +143,12 @@ class WordPressAPI:
 
     def publish_post(self, title, content, status, publish_date, category_ids, tags, author_id=None, featured_image_bytes=None, meta_title=None, meta_description=None):
         post_data = {'title': title, 'content': content, 'status': status, 'date': publish_date, 'categories': category_ids, 'tags': tags}
-        if author_id:
-            post_data['author'] = int(author_id)
+        if author_id: post_data['author'] = int(author_id)
         if featured_image_bytes:
             media_id = self.upload_image_from_bytes(featured_image_bytes, f"featured-image-{datetime.now().timestamp()}.png")
-            if media_id:
-                post_data['featured_media'] = media_id
+            if media_id: post_data['featured_media'] = media_id
         if meta_title or meta_description:
-            post_data['meta'] = {
-                "rank_math_title": meta_title, "rank_math_description": meta_description,
-                "_aioseo_title": meta_title, "_aioseo_description": meta_description,
-                "_yoast_wpseo_title": meta_title, "_yoast_wpseo_metadesc": meta_description
-            }
+            post_data['meta'] = { "rank_math_title": meta_title, "rank_math_description": meta_description, "_aioseo_title": meta_title, "_aioseo_description": meta_description, "_yoast_wpseo_title": meta_title, "_yoast_wpseo_metadesc": meta_description }
         try:
             response = requests.post(f"{self.base_url}/posts", json=post_data, auth=self.auth, timeout=20)
             response.raise_for_status()
@@ -167,12 +156,12 @@ class WordPressAPI:
         except requests.exceptions.HTTPError as e: return False, f"Błąd publikacji ({e.response.status_code}): {e.response.text}", None
         except requests.exceptions.RequestException as e: return False, f"Błąd sieci podczas publikacji: {e}", None
 
-# --- LOGIKA GENEROWANIA TREŚCI ---
+# --- LOGIKA GENEROWANIA TREŚCI I PROMPTY ---
+
 HTML_RULES = "Zasady formatowania HTML:\n- NIE UŻYWAJ <h1>.\n- UŻYWAJ WYŁĄCZNIE: <h2>, <h3>, <p>, <b>, <strong>, <ul>, <ol>, <li>, <table>, <tr>, <th>, <td>."
 SYSTEM_PROMPT_BASE = f"Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim.\n{HTML_RULES}"
 
-# --- ZMIANA: NOWY MASTER PROMPT TEMPLATE ---
-MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
+DEFAULT_MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
 {{PERSONA_DESCRIPTION}} Twoim celem jest napisanie wyczerpującego, wiarygodnego i praktycznego artykułu na temat "{{TEMAT_ARTYKULU}}", który demonstruje głęboką wiedzę (Ekspertyza), autentyczne doświadczenie (Doświadczenie), jest autorytatywny w tonie (Autorytatywność) i buduje zaufanie czytelnika (Zaufanie).
 
 # ZŁOŻONOŚĆ I DŁUGOŚĆ ARTYKUŁU
@@ -202,121 +191,20 @@ Dodatkowo, wpleć w treść poniższe frazy semantyczne, aby zwiększyć głębi
 # FORMATOWANIE
 Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym. Używaj pogrubień (<b> lub <strong>), aby wyróżnić kluczowe terminy i najważniejsze informacje, co ułatwia skanowanie tekstu. Jeśli dane można przedstawić w formie porównania lub kroków, rozważ użycie prostej tabeli (<table>) dla lepszej czytelności."""
 
-# --- ZMIANA: NOWA, UPROSZCZONA FUNKCJA GENEROWANIA ARTYKUŁU ---
-def generate_article_task(api_key, model, title, prompt):
-    """Generuje kompletny artykuł w jednym zapytaniu do API."""
-    try:
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT_BASE},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        content = response.choices[0].message.content
-        return title, content.strip()
-    except Exception as e:
-        st.error(f"Błąd API podczas generowania '{title}': {e}")
-        return title, f"**BŁĄD KRYTYCZNY podczas generowania artykułu:** {str(e)}"
-
-# --- ZMIANA: Funkcja call_gpt5_nano jest teraz używana tylko do briefu i meta, więc ją zostawiamy, ale upraszczamy ---
-def call_gpt5_nano_simple(api_key, prompt):
-    client = openai.OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model="gpt-5-nano",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
-
-
-def generate_image_prompt_gpt5(api_key, article_title):
-    prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI. 
-    
-KRYTYCZNE ZASADY - BEZWZGLĘDNIE PRZESTRZEGAJ:
-1. Prompt MUSI być w języku angielskim
-2. NIGDY nie używaj słów związanych z tekstem: NIE WOLNO użyć słów takich jak: text, words, letters, typography, caption, title, label, sign, signage, writing, inscription, message, document, paper, book, magazine, poster, banner
-3. NIE opisuj konceptów abstrakcyjnych przez tekst - zamiast "hints at science" użyj konkretnych obiektów wizualnych
-4. Zamiast abstrakcyjnych konceptów używaj konkretnych przedmiotów/scen
-
-WYMAGANE ELEMENTY:
-- Rozpocznij od: "photorealistic 4:3 horizontal composition"
-- Dodaj: "sharp focus, soft natural lighting"  
-- Opisz KONKRETNĄ scenę lub obiekty (nie abstrakcje)
-- Zakończ: "no text, no letters, no writing"
-
-PRZYKŁADY DOBRYCH PROMPTÓW:
-- Zamiast "hints at skincare science" → "laboratory glass bottles with serums, fresh aloe vera leaves"
-- Zamiast "suggesting healthy lifestyle" → "fresh vegetables, running shoes, water bottle"
-- Zamiast "representing business growth" → "ascending graph made of stacked coins, green plants growing"
-
-Temat artykułu: "{article_title}"
-
-Wygeneruj TYLKO prompt (1-2 zdania). Pamiętaj o formacie 4:3 i zakazie tekstu!"""
-    return call_gpt5_nano_simple(api_key, prompt).strip()
-
-def generate_image_gemini(api_key, image_prompt, aspect_ratio="4:3"):
-    """
-    Generuje obrazek używając nowego API Google Gemini 2.5 Flash Image Preview.
-    """
-    try:
-        if aspect_ratio not in image_prompt:
-            image_prompt = f"{aspect_ratio} aspect ratio, {image_prompt}"
-        if "no text" not in image_prompt.lower():
-            image_prompt += ", no text, no letters, no writing, no typography"
-        
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-image-preview",
-            contents=[image_prompt]
-        )
-        
-        if response.candidates:
-            for part in response.candidates[0].content.parts:
-                if part.inline_data is not None:
-                    return part.inline_data.data, None
-        
-        error_details = f"API nie zwróciło obrazka. Sprawdź czy prompt jest odpowiedni.\n\nPrompt: {image_prompt}"
-        if hasattr(response, 'text') and response.text:
-            error_details += f"\n\nOdpowiedź tekstowa: {response.text}"
-        return None, error_details
-        
-    except AttributeError as e:
-        return None, f"Błąd API: Model może nie być dostępny lub API się zmieniło. Szczegóły: {e}"
-    except Exception as e:
-        return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
-
-def generate_brief_and_image(openai_api_key, google_api_key, topic, aspect_ratio="4:3"):
-    """
-    Generuje brief artykułu oraz obrazek wyróżniający.
-    """
-    try:
-        # --- ZMIANA: NOWY, INTELIGENTNY PROMPT DO BRIEFU ---
-        brief_prompt = f"""
-Jesteś światowej klasy strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na podstawie podanego tematu.
+DEFAULT_BRIEF_PROMPT_TEMPLATE = """Jesteś światowej klasy strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na podstawie podanego tematu.
 
 # KROK 1: ANALIZA TEMATU
-Przeanalizuj podany temat: "{topic}" pod kątem jego złożoności i intencji wyszukiwania. Określ, czy temat jest:
+Przeanalizuj podany temat: "{{TOPIC}}" pod kątem jego złożoności i intencji wyszukiwania. Określ, czy temat jest:
 - **SZEROKI**: Wymaga wyczerpującego, długiego artykułu, który pełni rolę kompleksowego poradnika (np. 'pillar page'). Odpowiada na wiele powiązanych pytań.
 - **WĄSKI**: Odpowiada na jedno, bardzo konkretne pytanie. Wymaga krótszego, zwięzłego i precyzyjnego artykułu, który szybko dostarcza odpowiedź.
 
-PRZYKŁADY TEMATÓW SZEROKICH:
-- "Lwia zmarszczka - kompletny poradnik po pielęgnacji i zabiegach korygujących"
-- "SPF - opis, działanie, poradnik pielęgnacji i rodzaje"
-- "The Ordinary Retinol 1% in Squalane - recenzja"
-
-PRZYKŁADY TEMATÓW WĄSKICH:
-- "Czy dwudziestolatki mogą mieć zmarszczki?"
-- "Ile trzyma pierwszy botoks?"
-
 # KROK 2: TWORZENIE BRIEFU W FORMACIE JSON
 Na podstawie analizy z Kroku 1, stwórz brief w formacie JSON.
-
 **KRYTYCZNA ZASADA: Wartość klucza `temat_artykulu` MUSI być DOKŁADNIE taka sama jak temat podany przez użytkownika. NIE ZMIENIAJ, NIE POPRAWIAJ, NIE SKRACAJ ani NIE WYDŁUŻAJ tytułu.**
 
 Struktura JSON:
-{{
-  "temat_artykulu": "{topic}",
+{
+  "temat_artykulu": "{{TOPIC}}",
   "analiza_tematu": "Krótki opis, czy temat jest szeroki czy wąski i dlaczego.",
   "grupa_docelowa": "Krótki opis, dla kogo jest artykuł.",
   "zagadnienia_kluczowe": [
@@ -329,50 +217,92 @@ Struktura JSON:
   "dodatkowe_slowa_semantyczne": [
       // Array 5-10 fraz i kolokacji semantycznie wspierających główny temat.
   ]
-}}
+}
 
-Wygeneruj wyłącznie kompletny i poprawny brief w formacie JSON dla tematu: "{topic}"
+Wygeneruj wyłącznie kompletny i poprawny brief w formacie JSON dla tematu: "{{TOPIC}}"
 """
-        json_string = call_gpt5_nano_simple(openai_api_key, brief_prompt).strip().replace("```json", "").replace("```", "")
+
+def generate_article_task(api_key, model, title, prompt):
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(model=model, messages=[{"role": "system", "content": SYSTEM_PROMPT_BASE}, {"role": "user", "content": prompt}])
+        content = response.choices[0].message.content
+        return title, content.strip()
+    except Exception as e:
+        st.error(f"Błąd API podczas generowania '{title}': {e}")
+        return title, f"**BŁĄD KRYTYCZNY:** {str(e)}"
+
+def call_gpt5_nano_simple(api_key, prompt):
+    client = openai.OpenAI(api_key=api_key)
+    response = client.chat.completions.create(model="gpt-5-nano", messages=[{"role": "user", "content": prompt}])
+    return response.choices[0].message.content
+
+def generate_image_prompt_gpt5(api_key, article_title, style_prompt):
+    prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI, łącząc temat artykułu z podanym stylem przewodnim.
+    
+# STYL PRZEWODNI (NAJWAŻNIEJSZY)
+{style_prompt if style_prompt else "Brak specyficznego stylu, skup się na fotorealizmie."}
+
+# TEMAT ARTYKUŁU DO WIZUALIZACJI
+"{article_title}"
+
+# KRYTYCZNE ZASADY - BEZWZGLĘDNIE PRZESTRZEGAJ:
+1. Prompt MUSI być w języku angielskim.
+2. NIGDY nie używaj słów związanych z tekstem: NIE WOLNO użyć słów takich jak: text, words, letters, typography, caption, title, etc.
+3. Zamiast abstrakcyjnych konceptów używaj konkretnych, wizualnych obiektów/scen.
+4. Finalny prompt musi zaczynać się od "photorealistic, ...", a kończyć na "no text, no letters, no writing".
+5. Zintegruj styl przewodni z wizualizacją tematu w spójny, artystyczny sposób.
+
+Wygeneruj TYLKO gotowy prompt (1-2 zdania)."""
+    return call_gpt5_nano_simple(api_key, prompt).strip()
+
+def generate_image_gemini(api_key, image_prompt, aspect_ratio="4:3"):
+    try:
+        if aspect_ratio not in image_prompt: image_prompt = f"{aspect_ratio} aspect ratio, {image_prompt}"
+        if "no text" not in image_prompt.lower(): image_prompt += ", no text, no letters, no writing, no typography"
+        
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(model="gemini-2.5-flash-image-preview", contents=[image_prompt])
+        
+        if response.candidates:
+            for part in response.candidates[0].content.parts:
+                if part.inline_data is not None: return part.inline_data.data, None
+        
+        return None, f"API nie zwróciło obrazka. Sprawdź prompt: {image_prompt}"
+    except Exception as e:
+        return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
+
+def generate_brief_and_image(openai_api_key, google_api_key, topic, aspect_ratio, style_prompt, brief_template):
+    try:
+        final_brief_prompt = brief_template.replace("{{TOPIC}}", topic)
+        json_string = call_gpt5_nano_simple(openai_api_key, final_brief_prompt).strip().replace("```json", "").replace("```", "")
         brief_data = json.loads(json_string)
     except Exception as e:
         return topic, {"error": f"Błąd krytyczny podczas generowania briefu: {str(e)}"}, None, None
-
     try:
-        image_prompt = generate_image_prompt_gpt5(openai_api_key, brief_data['temat_artykulu'])
+        image_prompt = generate_image_prompt_gpt5(openai_api_key, brief_data['temat_artykulu'], style_prompt)
         st.info(f"Generowanie obrazka dla: {brief_data['temat_artykulu']}...")
         st.caption(f"Prompt obrazka: {image_prompt}")
         image_bytes, image_error = generate_image_gemini(google_api_key, image_prompt, aspect_ratio)
-        if image_error:
-            st.warning(f"Problem z generowaniem obrazka: {image_error}")
-        elif image_bytes:
-            st.success("Obrazek wygenerowany pomyślnie!")
         return topic, brief_data, image_bytes, image_error
     except Exception as e:
-        error_message = f"Błąd podczas generowania promptu/obrazka: {e}"
-        st.error(error_message)
-        return topic, brief_data, None, error_message
+        return topic, brief_data, None, f"Błąd podczas generowania promptu/obrazka: {e}"
 
 def generate_meta_tags_gpt5(api_key, article_title, article_content, keywords):
     try:
-        prompt = f"""Jesteś ekspertem SEO copywritingu. Przeanalizuj poniższy artykuł i stwórz do niego idealne meta tagi.
-Temat główny: {article_title}
-Słowa kluczowe: {", ".join(keywords)}
-Treść artykułu (fragment):
-{article_content[:2500]}
-
-Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (max 60 znaków, angażujący, z główną frazą na początku) i "meta_description" (max 155 znaków, zachęcający do kliknięcia, z call-to-action i słowami kluczowymi)."""
+        prompt = f"""Jesteś ekspertem SEO. Stwórz meta tagi dla artykułu. Temat: {article_title}. Słowa kluczowe: {", ".join(keywords)}. Treść (fragment): {article_content[:2500]}. Zwróć JSON: "meta_title" (max 60 znaków) i "meta_description" (max 155 znaków)."""
         json_string = call_gpt5_nano_simple(api_key, prompt).strip().replace("```json", "").replace("```", "")
         return json.loads(json_string)
     except Exception as e:
-        st.warning(f"Błąd generowania meta tagów: {e}. Używam wartości domyślnych.")
         return {"meta_title": article_title, "meta_description": ""}
 
 # --- INTERFEJS UŻYTKOWNIKA (STREAMLIT) ---
 
 st.set_page_config(layout="wide", page_title="PBN Manager")
 
-if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Zarządzanie Stronami"
+if 'master_prompt' not in st.session_state: st.session_state.master_prompt = DEFAULT_MASTER_PROMPT_TEMPLATE
+if 'brief_prompt' not in st.session_state: st.session_state.brief_prompt = DEFAULT_BRIEF_PROMPT_TEMPLATE
+if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Dashboard"
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
 
@@ -387,341 +317,227 @@ st.caption("Centralne zarządzanie i generowanie treści dla Twojej sieci blogó
 conn = get_db_connection()
 
 st.sidebar.header("Menu Główne")
-menu_options = ["Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "Dashboard"]
-st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice')
+menu_options = ["Dashboard", "Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "⚙️ Edytor Promptów"]
+st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice', label_visibility="collapsed")
 
 st.sidebar.header("Konfiguracja API")
-st.sidebar.info("Klucze API są pobierane z sekretów Streamlit (`st.secrets`). Możesz je również wprowadzić tymczasowo poniżej.")
+openai_api_key = st.secrets.get("OPENAI_API_KEY", "") or st.sidebar.text_input("Klucz OpenAI API", type="password")
+google_api_key = st.secrets.get("GOOGLE_API_KEY", "") or st.sidebar.text_input("Klucz Google AI API", type="password")
 
-openai_api_key = st.secrets.get("OPENAI_API_KEY")
-if not openai_api_key:
-    openai_api_key = st.sidebar.text_input("Klucz OpenAI API", type="password")
-
-google_api_key = st.secrets.get("GOOGLE_API_KEY")
-if not google_api_key:
-    google_api_key = st.sidebar.text_input("Klucz Google AI API", type="password")
-
-with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
-    uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
-    if uploaded_file is not None:
-        if uploaded_file.file_id != st.session_state.get('last_uploaded_file_id'):
-            try:
-                config_data = json.load(uploaded_file)
-                db_execute(conn, "DELETE FROM sites"); db_execute(conn, "DELETE FROM personas")
-                for site in config_data.get('sites', []):
-                    encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
-                    db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (site['name'], site['url'], site['username'], encrypted_password_bytes))
-                for persona in config_data.get('personas', []):
-                    db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
-                st.session_state.last_uploaded_file_id = uploaded_file.file_id
-                st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Błąd podczas przetwarzania pliku: {e}")
-    
-    sites_for_export = db_execute(conn, "SELECT name, url, username, app_password FROM sites", fetch="all")
-    personas_for_export = db_execute(conn, "SELECT name, description FROM personas", fetch="all")
-    if sites_for_export or personas_for_export:
-        export_data = {'sites': [], 'personas': []}
-        for name, url, username, encrypted_pass_bytes in sites_for_export:
-            encrypted_pass_b64 = base64.b64encode(encrypted_pass_bytes).decode('utf-8')
-            export_data['sites'].append({'name': name, 'url': url, 'username': username, 'app_password_b64': encrypted_pass_b64})
-        for name, description in personas_for_export:
-            export_data['personas'].append({'name': name, 'description': description})
-        st.download_button(label="Pobierz konfigurację", data=json.dumps(export_data, indent=2), file_name="pbn_config.json", mime="application/json")
-
-# --- GŁÓWNA LOGIKA WYŚWIETLANIA STRON ---
+# --- SEKCJE APLIKACJI ---
 
 if st.session_state.menu_choice == "Zarządzanie Stronami":
-    st.header("Zarządzanie Stronami i Konfiguracją")
-    st.info("To jest Twój punkt startowy. Załaduj zapisaną konfigurację w panelu bocznym lub dodaj swoje strony WordPress poniżej.")
+    st.header("🔗 Zarządzanie Stronami i Konfiguracją")
     st.subheader("Dodaj nową stronę")
     with st.form("add_site_form", clear_on_submit=True):
         name = st.text_input("Przyjazna nazwa strony")
         url = st.text_input("URL strony", placeholder="https://twojastrona.pl")
         username = st.text_input("Login WordPress")
         app_password = st.text_input("Hasło Aplikacji", type="password")
-        submitted = st.form_submit_button("Testuj połączenie i Zapisz")
-        if submitted:
-            if not all([name, url, username, app_password]): st.error("Wszystkie pola są wymagane!")
-            else:
+        if st.form_submit_button("Testuj połączenie i Zapisz", type="primary"):
+            if all([name, url, username, app_password]):
                 with st.spinner("Testowanie połączenia..."):
                     api = WordPressAPI(url, username, app_password)
                     success, message = api.test_connection()
                 if success:
                     encrypted_password = encrypt_data(app_password)
                     try:
-                        db_execute(conn, "INSERT INTO sites (name, url, username, app_password) VALUES (?, ?, ?, ?)", (name, url, username, encrypted_password))
-                        st.success(f"Strona '{name}' dodana! Pamiętaj, aby zapisać konfigurację do pliku.")
-                    except sqlite3.IntegrityError: st.error(f"Strona o URL '{url}' już istnieje w bazie.")
+                        db_execute(conn, "INSERT INTO sites (name, url, username, app_password, image_style_prompt) VALUES (?, ?, ?, ?, ?)", (name, url, username, encrypted_password, ""))
+                        st.success(f"Strona '{name}' dodana!")
+                    except sqlite3.IntegrityError: st.error(f"Strona o URL '{url}' już istnieje.")
                 else: st.error(f"Nie udało się dodać strony. Błąd: {message}")
+            else: st.error("Wszystkie pola są wymagane.")
+
     st.subheader("Lista załadowanych stron")
-    sites = db_execute(conn, "SELECT id, name, url, username FROM sites", fetch="all")
-    if not sites: st.info("Brak załadowanych stron.")
+    sites = db_execute(conn, "SELECT id, name, url, username, image_style_prompt FROM sites", fetch="all")
+    if not sites: st.info("Brak załadowanych stron. Dodaj swoją pierwszą, używając formularza powyżej.")
     else:
-        for site_id, name, url, username in sites:
-            cols = st.columns([0.4, 0.4, 0.2])
-            cols[0].markdown(f"**{name}**\n\n{url}")
-            cols[1].text(f"Login: {username}")
-            if cols[2].button("Usuń", key=f"delete_{site_id}"):
-                db_execute(conn, "DELETE FROM sites WHERE id = ?", (site_id,))
-                st.success(f"Strona '{name}' usunięta! Pamiętaj, aby zapisać nową konfigurację do pliku.")
-                st.rerun()
+        for site_id, name, url, username, style_prompt in sites:
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1])
+                c1.markdown(f"**{name}** (`{url}`)")
+                if c2.button("🗑️ Usuń", key=f"delete_{site_id}", use_container_width=True):
+                    db_execute(conn, "DELETE FROM sites WHERE id = ?", (site_id,))
+                    st.rerun()
+                
+                with st.expander("Edytuj styl wizualny obrazków dla tej strony"):
+                    new_style = st.text_area("Prompt stylu", value=style_prompt or "photorealistic, sharp focus, soft natural lighting", key=f"style_{site_id}", height=100, help="Opisz styl obrazków, np. 'minimalistyczny, flat design, pastelowe kolory' lub 'dramatyczne oświetlenie, styl kinowy, wysoki kontrast'.")
+                    if st.button("Zapisz styl", key=f"save_style_{site_id}"):
+                        db_execute(conn, "UPDATE sites SET image_style_prompt = ? WHERE id = ?", (new_style, site_id))
+                        st.success(f"Styl dla '{name}' zaktualizowany!")
+                        st.rerun()
 
 elif st.session_state.menu_choice == "Dashboard":
-    st.header("Dashboard")
-    sites = db_execute(conn, "SELECT id FROM sites", fetch="all")
-    if not sites:
-        st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami' lub załaduj plik konfiguracyjny.")
+    st.header("📊 Dashboard Aktywności")
+    sites_list = db_execute(conn, "SELECT id, name, url, username, app_password FROM sites", fetch="all")
+    if not sites_list:
+        st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami', aby dodać pierwszą.")
     else:
-        if st.button("Odśwież wszystkie statystyki"): st.cache_data.clear()
+        st.subheader("Liczba publikacji w czasie")
+        time_range_options = {"Ostatnie 7 dni": 7, "Ostatnie 30 dni": 30, "Ostatnie 3 miesiące": 90}
+        selected_range_label = st.radio("Wybierz zakres czasu", options=time_range_options.keys(), horizontal=True, label_visibility="collapsed")
+        days_to_fetch = time_range_options[selected_range_label]
+
         @st.cache_data(ttl=600)
-        def get_all_stats():
+        def get_all_posts_for_dashboard(sites_tuple, days):
+            start_date = datetime.now() - timedelta(days=days)
+            all_posts_dates = []
+            def fetch_site_posts(site_data):
+                _, _, url, username, enc_pass = site_data
+                api = WordPressAPI(url, username, decrypt_data(enc_pass))
+                return [p['date'] for p in api.get_all_posts_since(start_date)]
+
+            with ThreadPoolExecutor() as executor:
+                futures = {executor.submit(fetch_site_posts, site): site for site in sites_tuple}
+                for future in as_completed(futures):
+                    all_posts_dates.extend(future.result())
+            return all_posts_dates
+
+        with st.spinner(f"Pobieranie danych o publikacjach z {len(sites_list)} stron..."):
+            post_data = get_all_posts_for_dashboard(tuple(sites_list), days_to_fetch)
+
+        if not post_data:
+            st.info("Brak opublikowanych wpisów w wybranym okresie.")
+        else:
+            df_posts = pd.DataFrame(post_data, columns=['date'])
+            df_posts['date_only'] = pd.to_datetime(df_posts['date']).dt.date
+            posts_by_day = df_posts.groupby('date_only').size().reset_index(name='count')
+            posts_by_day = posts_by_day.set_index('date_only')
+            date_range = pd.date_range(start=date.today() - timedelta(days=days_to_fetch-1), end=date.today())
+            posts_by_day = posts_by_day.reindex(date_range.date, fill_value=0)
+            posts_by_day.index.name = "Data"
+            posts_by_day.columns = ["Liczba publikacji"]
+            st.bar_chart(posts_by_day)
+
+        st.subheader("Ogólne statystyki")
+        if st.button("Odśwież statystyki"): st.cache_data.clear()
+        
+        @st.cache_data(ttl=600)
+        def get_summary_stats(sites_tuple):
             all_data = []
-            sites_for_stats = db_execute(get_db_connection(), "SELECT id, name, url, username, app_password FROM sites", fetch="all")
-            progress_bar = st.progress(0, text="Pobieranie danych...")
-            for i, (site_id, name, url, username, encrypted_pass) in enumerate(sites_for_stats):
-                password = decrypt_data(encrypted_pass)
-                api = WordPressAPI(url, username, password)
+            for _, name, url, username, encrypted_pass in sites_tuple:
+                api = WordPressAPI(url, username, decrypt_data(encrypted_pass))
                 stats = api.get_stats()
                 all_data.append({"Nazwa": name, "URL": url, "Liczba wpisów": stats['total_posts'], "Ostatni wpis": stats['last_post_date']})
-                progress_bar.progress((i + 1) / len(sites_for_stats), text=f"Pobieranie danych dla: {name}")
-            progress_bar.empty()
             return all_data
-        stats_data = get_all_stats()
-        df = pd.DataFrame(stats_data)
-        total_posts_sum = pd.to_numeric(df['Liczba wpisów'], errors='coerce').sum()
-        col1, col2 = st.columns(2)
-        col1.metric("Liczba podłączonych stron", len(sites))
-        col2.metric("Łączna liczba wpisów", f"{int(total_posts_sum):,}".replace(",", " "))
-        st.dataframe(df, use_container_width=True)
-
-elif st.session_state.menu_choice == "Generator Briefów":
-    st.header("📝 Generator Briefów z GPT-5 Nano")
-    st.info("Krok 1: Wpisz tematy artykułów (każdy w nowej linii). Aplikacja wygeneruje dla nich szczegółowe briefy oraz obrazki wyróżniające przy użyciu Gemini 2.5 Flash Image Preview.")
-    
-    if not openai_api_key or not google_api_key: 
-        st.error("Wprowadź klucz OpenAI API oraz Google AI API w panelu bocznym, aby kontynuować.")
-    else:
-        topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
-        with st.expander("⚙️ Ustawienia generowania obrazków", expanded=False):
-            col_img1, col_img2 = st.columns(2)
-            aspect_ratio = col_img1.selectbox(
-                "Format obrazka",
-                options=["4:3", "16:9", "1:1", "3:2"],
-                index=0,
-                help="4:3 i 16:9 to formaty poziome, 1:1 to kwadrat"
-            )
-            col_img2.info(f"Wybrany format: **{aspect_ratio}** {'(poziomy)' if aspect_ratio in ['4:3', '16:9', '3:2'] else '(kwadrat)' if aspect_ratio == '1:1' else ''}")
-        
-        with st.expander("🧪 Testuj generowanie obrazków"):
-            test_prompt = st.text_input("Testowy prompt dla obrazka", 
-                value=f"photorealistic {aspect_ratio} horizontal composition, modern office workspace with laptop and coffee cup, soft natural lighting, no text, no letters, no writing")
-            if st.button("Testuj generowanie obrazka"):
-                with st.spinner("Generowanie testowego obrazka..."):
-                    test_image_bytes, test_error = generate_image_gemini(google_api_key, test_prompt, aspect_ratio)
-                    if test_error:
-                        st.error(f"Błąd: {test_error}")
-                    elif test_image_bytes:
-                        st.success("Obrazek wygenerowany pomyślnie!")
-                        st.image(test_image_bytes, caption="Testowy obrazek")
-                        st.code(test_prompt, language="text")
-                    else:
-                        st.warning("Nie otrzymano obrazka ani błędu - sprawdź konfigurację API")
-        
-        if st.button("Generuj briefy i obrazki", type="primary"):
-            topics = [topic.strip() for topic in topics_input.split('\n') if topic.strip()]
-            if not topics: 
-                st.error("Wpisz przynajmniej jeden temat.")
-            else:
-                st.session_state.generated_briefs = []
-                with st.spinner(f"Generowanie {len(topics)} briefów i obrazków..."):
-                    progress_bar = st.progress(0, text="Oczekiwanie na wyniki...")
-                    completed_count = 0
-                    for i, topic in enumerate(topics):
-                        st.info(f"Przetwarzanie: {topic}")
-                        topic_result, brief_data, image_bytes, image_error = generate_brief_and_image(
-                            openai_api_key, google_api_key, topic, aspect_ratio
-                        )
-                        st.session_state.generated_briefs.append({
-                            "topic": topic_result, 
-                            "brief": brief_data, 
-                            "image": image_bytes, 
-                            "image_error": image_error,
-                            "aspect_ratio": aspect_ratio
-                        })
-                        completed_count += 1
-                        progress_bar.progress(completed_count / len(topics), 
-                                            text=f"Ukończono {completed_count}/{len(topics)}...")
-                st.success("Generowanie briefów zakończone!")
-                
-    if st.session_state.generated_briefs:
-        st.subheader("Wygenerowane Briefy")
-        successful_images = sum(1 for b in st.session_state.generated_briefs if b['image'] is not None)
-        st.metric("Wygenerowane obrazki", f"{successful_images}/{len(st.session_state.generated_briefs)}")
-        
-        if st.button("Przejdź do generowania artykułów z tych briefów"):
-            st.session_state.menu_choice = "Generowanie Treści"
-            st.rerun()
             
-        for i, item in enumerate(st.session_state.generated_briefs):
-            with st.expander(f"**{i+1}. {item['brief'].get('temat_artykulu', item['topic'])}**", expanded=False):
-                col1, col2 = st.columns(2)
-                if 'error' in item['brief']:
-                    col1.error(f"Błąd generowania briefu: {item['brief']['error']}")
-                else:
-                    col1.subheader("📋 Brief")
-                    col1.json(item['brief'])
-                col2.subheader(f"🖼️ Obrazek wyróżniający ({item.get('aspect_ratio', '4:3')})")
-                if item['image_error']:
-                    col2.warning("Nie udało się wygenerować obrazka")
-                    with col2.expander("Szczegóły błędu"):
-                        st.code(item['image_error'], language="text")
-                elif item['image']:
-                    try:
-                        col2.image(item['image'], caption="Wygenerowany obrazek wyróżniający", use_column_width=True)
-                        col2.download_button(
-                            label="📥 Pobierz obrazek",
-                            data=item['image'],
-                            file_name=f"featured_image_{i+1}.png",
-                            mime="image/png"
-                        )
-                    except Exception as e:
-                        col2.error(f"Błąd wyświetlania obrazka: {e}")
-                else:
-                    col2.info("Obrazek nie został wygenerowany")
-
-elif st.session_state.menu_choice == "Generowanie Treści":
-    st.header("🤖 Generator Treści AI")
-    st.info("Krok 2: Wybierz briefy i Personę autora, a następnie wygeneruj finalne artykuły przy użyciu modelu GPT-5-nano.")
-    if not st.session_state.generated_briefs: st.warning("Brak wygenerowanych briefów. Przejdź najpierw do 'Generator Briefów'.")
-    else:
-        personas_list = db_execute(conn, "SELECT id, name, description FROM personas", fetch="all")
-        persona_map = {name: description for id, name, description in personas_list}
-        if not persona_map: st.error("Brak zdefiniowanych Person. Przejdź do 'Zarządzanie Personami', aby dodać pierwszą.")
-        else:
-            col1, col2 = st.columns(2)
-            selected_persona_name = col1.selectbox("Wybierz Personę autora", options=list(persona_map.keys()))
-            selected_model = "gpt-5-nano"
-            col2.info(f"Model do generowania artykułów: **{selected_model}**")
-            
-            if not openai_api_key: st.error("Wprowadź swój klucz OpenAI API w panelu bocznym.")
-            else:
-                valid_briefs_for_articles = [b for b in st.session_state.generated_briefs if not b['brief'].get('error')]
-                if not valid_briefs_for_articles:
-                    st.warning("Brak poprawnie wygenerowanych briefów do przetworzenia.")
-                else:
-                    df = pd.DataFrame(valid_briefs_for_articles)
-                    df['Zaznacz'] = False
-                    df['Temat'] = df['brief'].apply(lambda x: x.get('temat_artykulu', x.get('topic', 'Brak tytułu')))
-                    df['Ma obrazek'] = df['image'].apply(lambda x: "✅" if x else "❌")
-                    df['Brief'] = df['brief'].apply(lambda x: json.dumps(x, ensure_ascii=False, indent=2))
-                    
-                    with st.form("article_generation_form"):
-                        st.subheader("Wybierz briefy do przetworzenia")
-                        edited_df = st.data_editor(
-                            df[['Zaznacz', 'Temat', 'Ma obrazek', 'Brief']], 
-                            hide_index=True, 
-                            use_container_width=True,
-                            column_config={"Ma obrazek": st.column_config.TextColumn("Obrazek", width="small")}
-                        )
-                        submitted = st.form_submit_button("Generuj zaznaczone artykuły", type="primary")
-                        
-                        # --- ZMIANA: NOWA LOGIKA GENEROWANIA Z BATCHINGIEM ---
-                        if submitted:
-                            selected_briefs = edited_df[edited_df.Zaznacz]
-                            if selected_briefs.empty: st.error("Zaznacz przynajmniej jeden brief.")
-                            else:
-                                tasks_to_run = []
-                                for index, row in selected_briefs.iterrows():
-                                    original_brief_data = valid_briefs_for_articles[index]
-                                    brief_data = original_brief_data['brief']
-                                    
-                                    final_prompt = MASTER_PROMPT_TEMPLATE.replace("{{PERSONA_DESCRIPTION}}", persona_map[selected_persona_name])
-                                    final_prompt = final_prompt.replace("{{TEMAT_ARTYKULU}}", brief_data.get("temat_artykulu", row["Temat"]))
-                                    analiza = brief_data.get("analiza_tematu", "SZEROKI")
-                                    final_prompt = final_prompt.replace("{{ANALIZA_TEMATU}}", "SZEROKI" if "szeroki" in analiza.lower() else "WĄSKI")
-                                    final_prompt = final_prompt.replace("{{GRUPA_DOCELOWA}}", brief_data.get("grupa_docelowa", ""))
-                                    final_prompt = final_prompt.replace("{{SLOWA_KLUCZOWE}}", ", ".join(brief_data.get("slowa_kluczowe", [])))
-                                    final_prompt = final_prompt.replace("{{DODATKOWE_SLOWA_SEMANTYCZNE}}", ", ".join(brief_data.get("dodatkowe_slowa_semantyczne", [])))
-                                    zagadnienia_str = "\n".join([f"- {z}" for z in brief_data.get("zagadnienia_kluczowe", [])])
-                                    final_prompt = final_prompt.replace("{{ZAGADNIENIA_KLUCZOWE}}", zagadnienia_str)
-                                    
-                                    tasks_to_run.append({
-                                        'title': brief_data.get("temat_artykulu", row["Temat"]),
-                                        'prompt': final_prompt,
-                                        'keywords': brief_data.get("slowa_kluczowe", []),
-                                        'image': original_brief_data['image']
-                                    })
-                                
-                                st.session_state.generated_articles = []
-                                BATCH_SIZE = 5
-                                tasks_batches = [tasks_to_run[i:i + BATCH_SIZE] for i in range(0, len(tasks_to_run), BATCH_SIZE)]
-                                total_tasks = len(tasks_to_run)
-                                completed_count = 0
-
-                                with st.spinner(f"Generowanie {total_tasks} artykułów w partiach po {BATCH_SIZE}..."):
-                                    progress_bar = st.progress(0, text=f"Ukończono 0/{total_tasks}...")
-                                    
-                                    for i, batch in enumerate(tasks_batches):
-                                        st.info(f"Przetwarzanie partii {i+1}/{len(tasks_batches)} (artykuły {i*BATCH_SIZE + 1} - {i*BATCH_SIZE + len(batch)})...")
-                                        with ThreadPoolExecutor(max_workers=BATCH_SIZE) as executor:
-                                            future_to_task = {executor.submit(generate_article_task, openai_api_key, selected_model, task['title'], task['prompt']): task for task in batch}
-                                            
-                                            for future in as_completed(future_to_task):
-                                                task = future_to_task[future]
-                                                title, content = future.result()
-                                                
-                                                st.info(f"Generowanie meta tagów dla: {title}...")
-                                                meta_tags = generate_meta_tags_gpt5(openai_api_key, title, content, task['keywords'])
-                                                st.session_state.generated_articles.append({"title": title, "content": content, "image": task['image'], **meta_tags})
-
-                                                completed_count += 1
-                                                progress_bar.progress(completed_count / total_tasks, text=f"Ukończono {completed_count}/{total_tasks}...")
-                                
-                                st.success("Generowanie artykułów zakończone!")
-                                st.session_state.redirect_to_scheduler = True
-                                st.rerun()
+        stats_data = get_summary_stats(tuple(sites_list))
+        st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True)
 
 elif st.session_state.menu_choice == "Zarządzanie Personami":
     st.header("🎭 Zarządzanie Personami")
-    st.info("Persona to opis autora, który jest wstrzykiwany do głównego promptu, aby nadać artykułom unikalny styl i ton.")
     with st.expander("Dodaj nową Personę", expanded=True):
         with st.form("add_persona_form", clear_on_submit=True):
-            persona_name = st.text_input("Nazwa Persony (np. 'Dietetyk Kliniczny', 'Inżynier Oprogramowania')")
-            persona_desc = st.text_area("Opis Persony", height=150, help="Opisz kim jest autor, jakie ma doświadczenie i styl. Np. 'Jesteś doświadczonym dietetykiem klinicznym z 15-letnią praktyką, piszącym w sposób empatyczny i oparty na dowodach naukowych.'")
-            submitted = st.form_submit_button("Zapisz Personę")
-            if submitted:
+            persona_name = st.text_input("Nazwa Persony")
+            persona_desc = st.text_area("Opis Persony", height=150, help="Opisz kim jest autor, jakie ma doświadczenie i styl.")
+            if st.form_submit_button("Zapisz Personę"):
                 if persona_name and persona_desc:
                     try:
                         db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona_name, persona_desc))
-                        st.success(f"Persona '{persona_name}' została zapisana! Pamiętaj, aby zapisać całą konfigurację do pliku.")
-                    except sqlite3.IntegrityError:
-                        st.error(f"Persona o nazwie '{persona_name}' już istnieje.")
-                else:
-                    st.error("Nazwa i opis Persony nie mogą być puste.")
+                        st.success(f"Persona '{persona_name}' zapisana!")
+                    except sqlite3.IntegrityError: st.error(f"Persona o nazwie '{persona_name}' już istnieje.")
+                else: st.error("Nazwa i opis nie mogą być puste.")
+
     st.subheader("Lista zapisanych Person")
     personas = db_execute(conn, "SELECT id, name, description FROM personas", fetch="all")
-    if not personas:
-        st.info("Brak zapisanych Person. Dodaj swoją pierwszą, używając formularza powyżej.")
+    if not personas: st.info("Brak zapisanych Person.")
     else:
         for id, name, desc in personas:
             with st.expander(f"**{name}**"):
                 st.text_area("Opis", value=desc, height=100, disabled=True, key=f"desc_{id}")
-                if st.button("Usuń Personę", key=f"delete_persona_{id}"):
+                if st.button("Usuń", key=f"delete_persona_{id}"):
                     db_execute(conn, "DELETE FROM personas WHERE id = ?", (id,))
-                    st.success(f"Persona '{name}' usunięta! Pamiętaj, aby zapisać konfigurację.")
                     st.rerun()
+
+elif st.session_state.menu_choice == "Generator Briefów":
+    st.header("📝 Generator Briefów")
+    if not (openai_api_key and google_api_key): 
+        st.error("Wprowadź klucz OpenAI API oraz Google AI API w panelu bocznym.")
+    else:
+        topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
+        
+        st.subheader("Ustawienia generowania")
+        c1, c2 = st.columns(2)
+        aspect_ratio = c1.selectbox("Format obrazka", options=["4:3", "16:9", "1:1", "3:2"])
+        
+        site_styles = {"Domyślny (Fotorealizm)": ""}
+        for name, style in db_execute(conn, "SELECT name, image_style_prompt FROM sites", fetch="all"):
+            if style: site_styles[f"Styl: {name}"] = style
+        selected_style_label = c2.selectbox("Styl wizualny obrazków", options=site_styles.keys())
+        selected_style_prompt = site_styles[selected_style_label]
+
+        if st.button("Generuj briefy i obrazki", type="primary"):
+            topics = [topic.strip() for topic in topics_input.split('\n') if topic.strip()]
+            if topics:
+                st.session_state.generated_briefs = []
+                with st.spinner(f"Generowanie {len(topics)} briefów..."):
+                    for topic in topics:
+                        _, brief, img, err = generate_brief_and_image(openai_api_key, google_api_key, topic, aspect_ratio, selected_style_prompt, st.session_state.brief_prompt)
+                        st.session_state.generated_briefs.append({ "topic": topic, "brief": brief, "image": img, "image_error": err })
+                st.success("Generowanie zakończone!")
+            else: st.error("Wpisz przynajmniej jeden temat.")
+        
+        if st.session_state.generated_briefs:
+            st.subheader("Wygenerowane Briefy")
+            if st.button("Przejdź do generowania artykułów"):
+                st.session_state.menu_choice = "Generowanie Treści"
+                st.rerun()
+            for i, item in enumerate(st.session_state.generated_briefs):
+                with st.expander(f"**{i+1}. {item['brief'].get('temat_artykulu', item['topic'])}**"):
+                    # UI wyświetlania briefów bez zmian...
+                    st.json(item['brief'])
+                    if item['image']: st.image(item['image'])
+                    if item['image_error']: st.warning(item['image_error'])
+
+elif st.session_state.menu_choice == "Generowanie Treści":
+    st.header("🤖 Generator Treści AI")
+    if not st.session_state.generated_briefs: st.warning("Brak briefów. Przejdź do 'Generator Briefów'.")
+    else:
+        personas = {name: desc for _, name, desc in db_execute(conn, "SELECT * FROM personas", fetch="all")}
+        if not personas: st.error("Brak Person. Przejdź do 'Zarządzanie Personami'.")
+        else:
+            c1, c2 = st.columns(2)
+            persona_name = c1.selectbox("Wybierz Personę autora", options=personas.keys())
+            c2.info("Model: **gpt-5-nano**")
+            
+            valid_briefs = [b for b in st.session_state.generated_briefs if 'error' not in b['brief']]
+            if valid_briefs:
+                df = pd.DataFrame(valid_briefs)
+                df['Zaznacz'] = False
+                df['Temat'] = df['brief'].apply(lambda x: x.get('temat_artykulu', 'B/D'))
+                df['Ma obrazek'] = df['image'].apply(lambda x: "✅" if x else "❌")
+
+                with st.form("article_generation_form"):
+                    edited_df = st.data_editor(df[['Zaznacz', 'Temat', 'Ma obrazek']], hide_index=True, use_container_width=True)
+                    if st.form_submit_button("Generuj zaznaczone artykuły", type="primary"):
+                        indices = edited_df[edited_df.Zaznacz].index
+                        if not indices.empty:
+                            tasks = []
+                            for i in indices:
+                                brief = valid_briefs[i]['brief']
+                                prompt = st.session_state.master_prompt.replace("{{PERSONA_DESCRIPTION}}", personas[persona_name]).replace("{{TEMAT_ARTYKULU}}", brief.get("temat_artykulu", "")).replace("{{ANALIZA_TEMATU}}", "SZEROKI" if "szeroki" in brief.get("analiza_tematu", "").lower() else "WĄSKI").replace("{{GRUPA_DOCELOWA}}", brief.get("grupa_docelowa", "")).replace("{{ZAGADNIENIA_KLUCZOWE}}", "\n".join(f"- {z}" for z in brief.get("zagadnienia_kluczowe", []))).replace("{{SLOWA_KLUCZOWE}}", ", ".join(brief.get("slowa_kluczowe", []))).replace("{{DODATKOWE_SLOWA_SEMANTYCZNE}}", ", ".join(brief.get("dodatkowe_slowa_semantyczne", [])))
+                                tasks.append({'title': brief['temat_artykulu'], 'prompt': prompt, 'keywords': brief['slowa_kluczowe'], 'image': valid_briefs[i]['image']})
+
+                            st.session_state.generated_articles = []
+                            batches = [tasks[i:i + 5] for i in range(0, len(tasks), 5)]
+                            with st.spinner(f"Generowanie {len(tasks)} artykułów..."):
+                                for batch in batches:
+                                    with ThreadPoolExecutor(max_workers=5) as executor:
+                                        futures = {executor.submit(generate_article_task, openai_api_key, "gpt-5-nano", t['title'], t['prompt']): t for t in batch}
+                                        for future in as_completed(futures):
+                                            task, (title, content) = future.result(), future.result()
+                                            meta = generate_meta_tags_gpt5(openai_api_key, title, content, task['keywords'])
+                                            st.session_state.generated_articles.append({"title": title, "content": content, "image": task['image'], **meta})
+                            st.success("Generowanie zakończone!")
+                            st.session_state.redirect_to_scheduler = True
+                            st.rerun()
 
 elif st.session_state.menu_choice == "Harmonogram Publikacji":
     st.header("🗓️ Harmonogram Publikacji")
-    st.info("Krok 3: Wybierz artykuły, ustawienia publikacji i zaplanuj je z rozłożeniem w czasie. Obrazki wyróżniające zostaną automatycznie dodane do wpisów.")
-    if not st.session_state.generated_articles:
-        st.warning("Brak wygenerowanych artykułów. Przejdź do 'Generator Briefów', a następnie 'Generowanie Treści'.")
+    if not st.session_state.generated_articles: st.warning("Brak wygenerowanych artykułów.")
     else:
-        sites = db_execute(conn, "SELECT id, name, url, username, app_password FROM sites", fetch="all")
-        site_options = {site[1]: site for site in sites}
-        if not site_options: st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
+        sites = {s[1]: s for s in db_execute(conn, "SELECT * FROM sites", fetch="all")}
+        if not sites: st.warning("Brak załadowanych stron.")
         else:
             df = pd.DataFrame(st.session_state.generated_articles)
             df['Zaznacz'] = True
@@ -729,129 +545,92 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
             
             with st.form("bulk_schedule_form"):
                 st.subheader("1. Wybierz artykuły do publikacji")
-                edited_df = st.data_editor(
-                    df[['Zaznacz', 'title', 'Ma obrazek', 'meta_title', 'meta_description']], 
-                    hide_index=True, 
-                    use_container_width=True,
-                    column_config={
-                        "title": "Tytuł Artykułu", 
-                        "Ma obrazek": st.column_config.TextColumn("Obrazek", width="small"),
-                        "meta_title": "Meta Tytuł", 
-                        "meta_description": "Meta Opis"
-                    }
-                )
+                edited_df = st.data_editor(df[['Zaznacz', 'title', 'Ma obrazek', 'meta_title', 'meta_description']], hide_index=True, use_container_width=True)
                 
                 st.subheader("2. Ustawienia publikacji")
-                col_pub1, col_pub2 = st.columns(2)
-                selected_sites_names = col_pub1.multiselect("Wybierz strony docelowe", options=site_options.keys())
-                author_id = col_pub2.number_input("ID Autora (opcjonalnie)", min_value=1, step=1, help="Jeśli puste, użyty zostanie autor z danych logowania.")
+                c1, c2 = st.columns(2)
+                selected_sites = c1.multiselect("Wybierz strony docelowe", options=sites.keys())
+                author_id = c2.number_input("ID Autora (opcjonalnie)", min_value=1, step=1)
                 
-                category_source_site = st.selectbox("Pobierz kategorie ze strony:", options=site_options.keys())
-                available_categories = {}
-                if category_source_site:
-                    source_site_data = site_options[category_source_site]
-                    source_api = WordPressAPI(source_site_data[2], source_site_data[3], decrypt_data(source_site_data[4]))
-                    available_categories = source_api.get_categories()
-                selected_categories = st.multiselect("Wybierz kategorie", options=available_categories.keys())
+                cat_site = st.selectbox("Pobierz kategorie ze strony:", options=sites.keys())
+                api = WordPressAPI(sites[cat_site][2], sites[cat_site][3], decrypt_data(sites[cat_site][4]))
+                categories = api.get_categories()
+                selected_cats = st.multiselect("Wybierz kategorie", options=categories.keys())
+                tags_str = st.text_input("Tagi (oddzielone przecinkami)")
                 
-                tags_str = st.text_input("Tagi (wspólne dla wszystkich, oddzielone przecinkami)")
+                st.subheader("3. Planowanie")
+                c1,c2,c3 = st.columns(3)
+                start_date = c1.date_input("Data pierwszego wpisu", datetime.now())
+                start_time = c2.time_input("Godzina pierwszego wpisu", datetime.now().time())
+                interval = c3.number_input("Odstęp (godziny)", min_value=1, value=8)
                 
-                st.subheader("3. Planowanie w czasie (Staggering)")
-                col_date1, col_date2, col_date3 = st.columns(3)
-                start_date = col_date1.date_input("Data publikacji pierwszego artykułu", datetime.now())
-                start_time = col_date2.time_input("Godzina publikacji pierwszego artykułu", datetime.now().time())
-                interval_hours = col_date3.number_input("Odstęp między publikacjami (w godzinach)", min_value=1, value=8)
-                
-                submitted = st.form_submit_button("Zaplanuj zaznaczone artykuły", type="primary")
-                if submitted:
-                    selected_articles = edited_df[edited_df.Zaznacz]
-                    if selected_articles.empty or not selected_sites_names:
-                        st.error("Zaznacz przynajmniej jeden artykuł i jedną stronę docelową.")
-                    else:
-                        current_publish_time = datetime.combine(start_date, start_time)
-                        with st.spinner("Planowanie publikacji..."):
-                            for index, row in selected_articles.iterrows():
-                                if index < len(st.session_state.generated_articles):
-                                    full_article_data = st.session_state.generated_articles[index]
-                                    for site_name in selected_sites_names:
-                                        site_info = site_options[site_name]
-                                        url, username, encrypted_pass = site_info[2], site_info[3], site_info[4]
-                                        password = decrypt_data(encrypted_pass)
-                                        api = WordPressAPI(url, username, password)
-                                        
-                                        site_categories = api.get_categories()
-                                        target_category_ids = [site_categories[name] for name in selected_categories if name in site_categories]
-                                        target_tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
-                                        
-                                        image_status = " (z obrazkiem)" if full_article_data.get('image') else " (bez obrazka)"
-                                        st.info(f"Planowanie '{row['title']}'{image_status} na {site_name} na dzień {current_publish_time.strftime('%Y-%m-%d %H:%M')}...")
-                                        
-                                        success, message, _ = api.publish_post(
-                                            row['title'], full_article_data['content'], "future", current_publish_time.isoformat(),
-                                            target_category_ids, target_tags, author_id=int(author_id) if author_id else None,
-                                            featured_image_bytes=full_article_data.get('image'),
-                                            meta_title=row['meta_title'], meta_description=row['meta_description']
-                                        )
-                                        if success: st.success(f"[{site_name}]: {message}")
-                                        else: st.error(f"[{site_name}]: {message}")
-                                    current_publish_time += timedelta(hours=interval_hours)
-                        st.success("Zakończono planowanie wszystkich zaznaczonych artykułów!")
+                if st.form_submit_button("Zaplanuj zaznaczone artykuły", type="primary"):
+                    selected = edited_df[edited_df.Zaznacz]
+                    if not selected.empty and selected_sites:
+                        pub_time = datetime.combine(start_date, start_time)
+                        for i, row in selected.iterrows():
+                            article = st.session_state.generated_articles[i]
+                            for site_name in selected_sites:
+                                site_info = sites[site_name]
+                                api = WordPressAPI(site_info[2], site_info[3], decrypt_data(site_info[4]))
+                                site_cats = api.get_categories()
+                                cat_ids = [site_cats[name] for name in selected_cats if name in site_cats]
+                                success, msg, _ = api.publish_post(row['title'], article['content'], "future", pub_time.isoformat(), cat_ids, tags_str.split(','), author_id or None, article['image'], row['meta_title'], row['meta_description'])
+                                if success: st.success(f"[{site_name}]: {msg}")
+                                else: st.error(f"[{site_name}]: {msg}")
+                            pub_time += timedelta(hours=interval)
+                        st.balloons()
 
 elif st.session_state.menu_choice == "Zarządzanie Treścią":
-    st.header("Zarządzanie Treścią i Masowa Edycja")
-    sites = db_execute(conn, "SELECT id, name, url, username, app_password FROM sites", fetch="all")
-    site_options = {site[1]: site for site in sites}
-    if not site_options: st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
-    else:
-        selected_site_name = st.selectbox("Wybierz stronę do edycji", options=site_options.keys())
-        if selected_site_name:
-            site_id, name, url, username, encrypted_pass = site_options[selected_site_name]
-            password = decrypt_data(encrypted_pass)
-            st.subheader(f"Wpisy na stronie: {name}")
-            @st.cache_data(ttl=300)
-            def get_site_data(_url, _username, _password):
-                api_instance = WordPressAPI(_url, _username, _password)
-                posts = api_instance.get_posts()
-                categories = api_instance.get_categories()
-                all_users = api_instance.get_users()
-                return posts, categories, all_users
-            
-            with st.spinner(f"Pobieranie danych ze strony {name}..."):
-                posts, categories, all_users = get_site_data(url, username, password)
-            
-            users_from_posts = {post['author_name']: post['author_id'] for post in posts if post.get('author_name') != 'N/A'} if posts else {}
-            final_users_map = {**all_users, **users_from_posts}
-            if not posts: st.info("Nie znaleziono wpisów na tej stronie lub wystąpił błąd połączenia.")
-            else:
-                df = pd.DataFrame(posts).rename(columns={'author_name': 'author'})
-                df['Zaznacz'] = False
-                st.info("Zaznacz wpisy, które chcesz edytować, a następnie użyj formularza masowej edycji poniżej.")
-                edited_df = st.data_editor(df[['Zaznacz', 'id', 'title', 'date', 'author', 'categories']], column_config={"Zaznacz": st.column_config.CheckboxColumn(required=True)},
-                                           disabled=["id", "title", "date", "author", "categories"], hide_index=True, use_container_width=True)
-                selected_posts = edited_df[edited_df.Zaznacz]
-                if not selected_posts.empty:
-                    st.subheader(f"Masowa edycja dla {len(selected_posts)} zaznaczonych wpisów")
-                    with st.form("bulk_edit_form"):
-                        api = WordPressAPI(url, username, password)
-                        new_category_names = st.multiselect("Zastąp kategorie", options=categories.keys())
-                        new_author_name = st.selectbox("Zmień autora", options=[None] + sorted(list(final_users_map.keys())))
-                        submitted = st.form_submit_button("Wykonaj masową edycję")
-                        if submitted:
-                            if not new_category_names and not new_author_name: st.error("Wybierz przynajmniej jedną akcję do wykonania.")
-                            else:
-                                update_data = {}
-                                if new_category_names: update_data['categories'] = [categories[name] for name in new_category_names]
-                                if new_author_name: update_data['author'] = final_users_map[new_author_name]
-                                with st.spinner("Aktualizowanie wpisów..."):
-                                    progress_bar = st.progress(0)
-                                    total_selected = len(selected_posts)
-                                    for i, post_id in enumerate(selected_posts['id']):
-                                        success, message = api.update_post(post_id, update_data)
-                                        if success: st.success(message)
-                                        else: st.error(message)
-                                        progress_bar.progress((i + 1) / total_selected)
-                                st.info("Proces zakończony. Odśwież dane, aby zobaczyć zmiany.")
-                                st.cache_data.clear()
-                                st.rerun()
-                else:
-                    st.caption("Zaznacz przynajmniej jeden wpis, aby aktywować panel masowej edycji.")
+    st.header("✏️ Zarządzanie Treścią")
+    sites = {s[1]: s for s in db_execute(conn, "SELECT * FROM sites", fetch="all")}
+    if sites:
+        site_name = st.selectbox("Wybierz stronę", options=sites.keys())
+        site_info = sites[site_name]
+        api = WordPressAPI(site_info[2], site_info[3], decrypt_data(site_info[4]))
+        
+        @st.cache_data(ttl=300)
+        def get_site_content(_site_name):
+            return api.get_posts(), api.get_categories(), api.get_users()
+        
+        posts, categories, users = get_site_content(site_name)
+        if posts:
+            df = pd.DataFrame(posts)
+            df['Zaznacz'] = False
+            edited_df = st.data_editor(df[['Zaznacz', 'id', 'title', 'date', 'author', 'categories']], disabled=['id', 'title', 'date', 'author', 'categories'], hide_index=True)
+            selected_posts = edited_df[edited_df.Zaznacz]
+            if not selected_posts.empty:
+                with st.form("bulk_edit_form"):
+                    st.subheader(f"Masowa edycja dla {len(selected_posts)} wpisów")
+                    new_cats = st.multiselect("Zastąp kategorie", options=categories.keys())
+                    new_author = st.selectbox("Zmień autora", options=[None] + list(users.keys()))
+                    if st.form_submit_button("Wykonaj"):
+                        data = {}
+                        if new_cats: data['categories'] = [categories[c] for c in new_cats]
+                        if new_author: data['author'] = users[new_author]
+                        if data:
+                            for post_id in selected_posts['id']:
+                                success, msg = api.update_post(post_id, data)
+                                if success: st.success(msg)
+                                else: st.error(msg)
+                            st.cache_data.clear()
+                            st.rerun()
+
+elif st.session_state.menu_choice == "⚙️ Edytor Promptów":
+    st.header("⚙️ Edytor Promptów")
+    st.info("Dostosuj szablony promptów używane do generowania briefów i artykułów. Zmiany są aktywne w bieżącej sesji.")
+    tab1, tab2 = st.tabs(["Master Prompt (Artykuły)", "Prompt do Briefu"])
+    with tab1:
+        st.subheader("Master Prompt do generowania artykułów")
+        st.markdown("**Zmienne:** `{{PERSONA_DESCRIPTION}}`, `{{TEMAT_ARTYKULU}}`, `{{ANALIZA_TEMATU}}`, `{{GRUPA_DOCELOWA}}`, `{{ZAGADNIENIA_KLUCZOWE}}`, `{{SLOWA_KLUCZOWE}}`, `{{DODATKOWE_SLOWA_SEMANTYCZNE}}`")
+        st.session_state.master_prompt = st.text_area("Edytuj Master Prompt", value=st.session_state.master_prompt, height=600, label_visibility="collapsed")
+        if st.button("Przywróć domyślny Master Prompt"):
+            st.session_state.master_prompt = DEFAULT_MASTER_PROMPT_TEMPLATE
+            st.rerun()
+    with tab2:
+        st.subheader("Prompt do generowania briefu")
+        st.markdown("**Zmienne:** `{{TOPIC}}`")
+        st.session_state.brief_prompt = st.text_area("Edytuj Prompt do Briefu", value=st.session_state.brief_prompt, height=600, label_visibility="collapsed")
+        if st.button("Przywróć domyślny Prompt do Briefu"):
+            st.session_state.brief_prompt = DEFAULT_BRIEF_PROMPT_TEMPLATE
+            st.rerun()
