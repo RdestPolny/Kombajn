@@ -339,11 +339,6 @@ if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Dashbo
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
 
-if st.session_state.get('redirect_to_scheduler', False):
-    st.session_state.redirect_to_scheduler = False
-    st.session_state.menu_choice = "Harmonogram Publikacji"
-    st.rerun()
-
 st.title("🚀 PBN Manager")
 st.caption("Centralne zarządzanie i generowanie treści dla Twojej sieci blogów.")
 
@@ -351,7 +346,18 @@ conn = get_db_connection()
 
 st.sidebar.header("Menu Główne")
 menu_options = ["Dashboard", "Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "⚙️ Edytor Promptów"]
-st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice')
+
+# --- NOWA LOGIKA DO PROGRAMOWEJ NAWIGACJI ---
+default_index = 0
+if 'go_to_page' in st.session_state:
+    try:
+        default_index = menu_options.index(st.session_state.go_to_page)
+        del st.session_state.go_to_page # Usuwamy flagę, aby nie wpływała na kolejne interakcje
+    except ValueError:
+        default_index = 0 # Na wypadek, gdyby nazwa strony była błędna
+
+st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice', index=default_index)
+
 
 st.sidebar.header("Konfiguracja API")
 openai_api_key = st.secrets.get("OPENAI_API_KEY", "") or st.sidebar.text_input("Klucz OpenAI API", type="password")
@@ -559,7 +565,7 @@ elif st.session_state.menu_choice == "Generator Briefów":
         if st.session_state.generated_briefs:
             st.subheader("Wygenerowane Briefy")
             if st.button("Przejdź do generowania artykułów"):
-                st.session_state.menu_choice = "Generowanie Treści"
+                st.session_state.go_to_page = "Generowanie Treści"
                 st.rerun()
             for i, item in enumerate(st.session_state.generated_briefs):
                 with st.expander(f"**{i+1}. {item['brief'].get('temat_artykulu', item['topic'])}**"):
@@ -608,7 +614,7 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                         meta = generate_meta_tags_gpt5(openai_api_key, title, content, task['keywords'])
                                         st.session_state.generated_articles.append({"title": title, "content": content, "image": task['image'], **meta})
                             st.success("Generowanie zakończone!")
-                            st.session_state.redirect_to_scheduler = True
+                            st.session_state.go_to_page = "Harmonogram Publikacji"
                             st.rerun()
 
 elif st.session_state.menu_choice == "Harmonogram Publikacji":
