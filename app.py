@@ -40,10 +40,10 @@ def init_db(conn):
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sites (
-            id INTEGER PRIMARY KEY, 
-            name TEXT, 
-            url TEXT UNIQUE, 
-            username TEXT, 
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            url TEXT UNIQUE,
+            username TEXT,
             app_password BLOB,
             image_style_prompt TEXT
         )
@@ -257,7 +257,7 @@ def generate_article_two_parts(api_key, title, prompt):
 
     part2_prompt = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nOto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie od miejsca, w którym przerwano. Nie dodawaj wstępów typu 'Oto kontynuacja' ani nie powtarzaj tytułu.\n\nOryginalne wytyczne do artykułu:\n{prompt}\n\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"
     part2_text = call_gpt5_nano(api_key, part2_prompt)
-    
+
     return title, part1_text.strip() + "\n\n" + part2_text.strip()
 
 def generate_article_dispatcher(model, api_key, title, prompt):
@@ -271,7 +271,7 @@ def generate_article_dispatcher(model, api_key, title, prompt):
 
 def generate_image_prompt_gpt5(api_key, article_title, style_prompt):
     prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI, łącząc temat artykułu z podanym stylem przewodnim.
-    
+
 # STYL PRZEWODNI (NAJWAŻNIEJSZY)
 {style_prompt if style_prompt else "Brak specyficznego stylu, skup się na fotorealizmie."}
 
@@ -292,14 +292,14 @@ def generate_image_gemini(api_key, image_prompt, aspect_ratio="4:3"):
     try:
         if aspect_ratio not in image_prompt: image_prompt = f"{aspect_ratio} aspect ratio, {image_prompt}"
         if "no text" not in image_prompt.lower(): image_prompt += ", no text, no letters, no writing, no typography"
-        
+
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(model="gemini-2.5-flash-image-preview", contents=[image_prompt])
-        
+
         if response.candidates:
             for part in response.candidates[0].content.parts:
                 if part.inline_data is not None: return part.inline_data.data, None
-        
+
         return None, f"API nie zwróciło obrazka. Sprawdź prompt: {image_prompt}"
     except Exception as e:
         return None, f"Krytyczny błąd podczas komunikacji z API Gemini: {e}"
@@ -347,7 +347,7 @@ conn = get_db_connection()
 st.sidebar.header("Menu Główne")
 menu_options = ["Dashboard", "Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "⚙️ Edytor Promptów"]
 
-# --- NOWA LOGIKA DO PROGRAMOWEJ NAWIGACJI ---
+# --- POPRAWIONA LOGIKA DO PROGRAMOWEJ NAWIGACJI ---
 default_index = 0
 if 'go_to_page' in st.session_state:
     try:
@@ -358,12 +358,10 @@ if 'go_to_page' in st.session_state:
 
 st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice', index=default_index)
 
-
 st.sidebar.header("Konfiguracja API")
 openai_api_key = st.secrets.get("OPENAI_API_KEY", "") or st.sidebar.text_input("Klucz OpenAI API", type="password")
 google_api_key = st.secrets.get("GOOGLE_API_KEY", "") or st.sidebar.text_input("Klucz Google AI API", type="password")
 
-# PRZYWRÓCONA I ZAKTUALIZOWANA SEKCJA ZARZĄDZANIA KONFIGURACJĄ JSON
 with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
     uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
     if uploaded_file is not None:
@@ -372,26 +370,24 @@ with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
                 config_data = json.load(uploaded_file)
                 db_execute(conn, "DELETE FROM sites")
                 db_execute(conn, "DELETE FROM personas")
-                
+
                 for site in config_data.get('sites', []):
                     encrypted_password_bytes = base64.b64decode(site['app_password_b64'])
-                    # Używamy .get() aby zapewnić kompatybilność wsteczną ze starymi plikami konfiguracyjnymi
                     style_prompt = site.get('image_style_prompt', '')
-                    db_execute(conn, 
-                        "INSERT INTO sites (name, url, username, app_password, image_style_prompt) VALUES (?, ?, ?, ?, ?)", 
+                    db_execute(conn,
+                        "INSERT INTO sites (name, url, username, app_password, image_style_prompt) VALUES (?, ?, ?, ?, ?)",
                         (site['name'], site['url'], site['username'], encrypted_password_bytes, style_prompt)
                     )
-                
+
                 for persona in config_data.get('personas', []):
                     db_execute(conn, "INSERT INTO personas (name, description) VALUES (?, ?)", (persona['name'], persona['description']))
-                
+
                 st.session_state.last_uploaded_file_id = uploaded_file.file_id
                 st.success(f"Pomyślnie załadowano {len(config_data.get('sites',[]))} stron i {len(config_data.get('personas',[]))} person!")
                 st.rerun()
             except Exception as e:
                 st.error(f"Błąd podczas przetwarzania pliku: {e}")
-    
-    # Zaktualizowana logika eksportu, aby uwzględniała nowe pole
+
     sites_for_export = db_execute(conn, "SELECT name, url, username, app_password, image_style_prompt FROM sites", fetch="all")
     personas_for_export = db_execute(conn, "SELECT name, description FROM personas", fetch="all")
     if sites_for_export or personas_for_export:
@@ -399,9 +395,9 @@ with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
         for name, url, username, encrypted_pass_bytes, style_prompt in sites_for_export:
             encrypted_pass_b64 = base64.b64encode(encrypted_pass_bytes).decode('utf-8')
             export_data['sites'].append({
-                'name': name, 
-                'url': url, 
-                'username': username, 
+                'name': name,
+                'url': url,
+                'username': username,
                 'app_password_b64': encrypted_pass_b64,
                 'image_style_prompt': style_prompt
             })
@@ -445,7 +441,7 @@ if st.session_state.menu_choice == "Zarządzanie Stronami":
                 if c2.button("🗑️ Usuń", key=f"delete_{site_id}", use_container_width=True):
                     db_execute(conn, "DELETE FROM sites WHERE id = ?", (site_id,))
                     st.rerun()
-                
+
                 with st.expander("Edytuj styl wizualny obrazków dla tej strony"):
                     new_style = st.text_area("Prompt stylu", value=style_prompt or "photorealistic, sharp focus, soft natural lighting", key=f"style_{site_id}", height=100, help="Opisz styl obrazków, np. 'minimalistyczny, flat design, pastelowe kolory' lub 'dramatyczne oświetlenie, styl kinowy, wysoki kontrast'.")
                     if st.button("Zapisz styl", key=f"save_style_{site_id}"):
@@ -504,7 +500,7 @@ elif st.session_state.menu_choice == "Dashboard":
                 stats = api.get_stats()
                 all_data.append({"Nazwa": name, "URL": url, "Liczba wpisów": stats['total_posts'], "Ostatni wpis": stats['last_post_date']})
             return all_data
-            
+
         if st.button("Odśwież statystyki"): st.cache_data.clear()
         stats_data = get_summary_stats(tuple(sites_list))
         st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True)
@@ -536,15 +532,15 @@ elif st.session_state.menu_choice == "Zarządzanie Personami":
 
 elif st.session_state.menu_choice == "Generator Briefów":
     st.header("📝 Generator Briefów")
-    if not (openai_api_key and google_api_key): 
+    if not (openai_api_key and google_api_key):
         st.error("Wprowadź klucz OpenAI API oraz Google AI API w panelu bocznym.")
     else:
         topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
-        
+
         st.subheader("Ustawienia generowania")
         c1, c2 = st.columns(2)
         aspect_ratio = c1.selectbox("Format obrazka", options=["4:3", "16:9", "1:1", "3:2"])
-        
+
         site_styles = {"Domyślny (Fotorealizm)": ""}
         for name, style in db_execute(conn, "SELECT name, image_style_prompt FROM sites", fetch="all"):
             if style: site_styles[f"Styl: {name}"] = style
@@ -561,7 +557,7 @@ elif st.session_state.menu_choice == "Generator Briefów":
                         st.session_state.generated_briefs.append({ "topic": topic, "brief": brief, "image": img, "image_error": err })
                 st.success("Generowanie zakończone!")
             else: st.error("Wpisz przynajmniej jeden temat.")
-        
+
         if st.session_state.generated_briefs:
             st.subheader("Wygenerowane Briefy")
             if st.button("Przejdź do generowania artykułów"):
@@ -585,7 +581,7 @@ elif st.session_state.menu_choice == "Generowanie Treści":
             c1, c2 = st.columns(2)
             persona_name = c1.selectbox("Wybierz Personę autora", options=personas.keys())
             c2.info("Model: **gpt-5-nano**")
-            
+
             valid_briefs = [b for b in st.session_state.generated_briefs if 'error' not in b['brief']]
             if valid_briefs:
                 df = pd.DataFrame(valid_briefs)
@@ -628,43 +624,61 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
             df = pd.DataFrame(st.session_state.generated_articles)
             df['Zaznacz'] = True
             df['Ma obrazek'] = df['image'].apply(lambda x: "✅" if x else "❌")
-            
+
             with st.form("bulk_schedule_form"):
                 st.subheader("1. Wybierz artykuły do publikacji")
                 edited_df = st.data_editor(df[['Zaznacz', 'title', 'Ma obrazek', 'meta_title', 'meta_description']], hide_index=True, use_container_width=True, column_config={"title": "Tytuł", "Ma obrazek": st.column_config.TextColumn("Obrazek", width="small"), "meta_title": "Meta Tytuł", "meta_description": "Meta Opis"})
-                
+
                 st.subheader("2. Ustawienia publikacji")
                 c1, c2 = st.columns(2)
                 selected_sites = c1.multiselect("Wybierz strony docelowe", options=sites_options.keys())
                 author_id = c2.number_input("ID Autora (opcjonalnie)", min_value=1, step=1)
-                
+
                 cat_site = st.selectbox("Pobierz kategorie ze strony:", options=sites_options.keys())
                 api = WordPressAPI(sites_options[cat_site][2], sites_options[cat_site][3], decrypt_data(sites_options[cat_site][4]))
                 categories = api.get_categories()
                 selected_cats = st.multiselect("Wybierz kategorie", options=categories.keys())
                 tags_str = st.text_input("Tagi (oddzielone przecinkami)")
-                
+
                 st.subheader("3. Planowanie")
                 c1,c2,c3 = st.columns(3)
                 start_date_val = c1.date_input("Data pierwszego wpisu", datetime.now())
                 start_time_val = c2.time_input("Godzina pierwszego wpisu", datetime.now().time())
                 interval = c3.number_input("Odstęp (godziny)", min_value=1, value=8)
-                
+
                 if st.form_submit_button("Zaplanuj zaznaczone artykuły", type="primary"):
                     selected = edited_df[edited_df.Zaznacz]
                     if not selected.empty and selected_sites:
                         pub_time = datetime.combine(start_date_val, start_time_val)
+                        tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+
                         with st.spinner("Planowanie publikacji..."):
-                            for i, row in selected.iterrows():
-                                article = st.session_state.generated_articles[i]
+                            for index, row in selected.iterrows():
+                                article = st.session_state.generated_articles[index]
                                 for site_name in selected_sites:
                                     site_info = sites_options[site_name]
                                     api_pub = WordPressAPI(site_info[2], site_info[3], decrypt_data(site_info[4]))
+                                    
+                                    # Pobieranie kategorii dla konkretnej strony
                                     site_cats = api_pub.get_categories()
                                     cat_ids = [site_cats[name] for name in selected_cats if name in site_cats]
-                                    success, msg, _ = api_pub.publish_post(row['title'], article['content'], "future", pub_time.isoformat(), tags_str.split(','), cat_ids, author_id or None, article.get('image'), row['meta_title'], row['meta_description'])
+
+                                    # --- POPRAWIONE WYWOŁANIE FUNKCJI Z NAZWANYMI ARGUMENTAMI ---
+                                    success, msg, _ = api_pub.publish_post(
+                                        title=row['title'],
+                                        content=article['content'],
+                                        status="future",
+                                        publish_date=pub_time.isoformat(),
+                                        category_ids=cat_ids,
+                                        tags=tags_list,
+                                        author_id=(author_id if author_id > 0 else None),
+                                        featured_image_bytes=article.get('image'),
+                                        meta_title=row['meta_title'],
+                                        meta_description=row['meta_description']
+                                    )
                                     if success: st.success(f"[{site_name}]: {msg}")
                                     else: st.error(f"[{site_name}]: {msg}")
+                                
                                 pub_time += timedelta(hours=interval)
                         st.balloons()
 
@@ -676,12 +690,12 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
         site_name = st.selectbox("Wybierz stronę", options=sites_options.keys())
         site_info = sites_options[site_name]
         api = WordPressAPI(site_info[2], site_info[3], decrypt_data(site_info[4]))
-        
+
         @st.cache_data(ttl=300)
         def get_site_content(_site_name):
             posts, categories, users = api.get_posts(per_page=100), api.get_categories(), api.get_users()
             return posts, categories, users
-        
+
         posts, categories, users = get_site_content(site_name)
         if posts:
             df = pd.DataFrame(posts)
