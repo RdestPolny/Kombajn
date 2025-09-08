@@ -183,45 +183,51 @@ HTML_RULES = "Zasady formatowania HTML:\n- NIE UŻYWAJ <h1>.\n- UŻYWAJ WYŁĄCZ
 SYSTEM_PROMPT_BASE = f"Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim.\n{HTML_RULES}"
 
 DEFAULT_MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
-{{PERSONA_DESCRIPTION}} Twoim celem jest napisanie wyczerpującego, wiarygodnego i praktycznego artykułu na temat "{{TEMAT_ARTYKULU}}", który demonstruje głęboką wiedzę (Ekspertyza), autentyczne doświadczenie (Doświadczenie), jest autorytatywny w tonie (Autorytatywność) i buduje zaufanie czytelnika (Zaufanie).
+{{PERSONA_DESCRIPTION}} Twoim celem jest napisanie wyczerpującego, wiarygodnego i praktycznego artykułu na temat "{{TEMAT_ARTYKULU}}", który demonstruje głęboką wiedzę (E-E-A-T).
 
 # ZŁOŻONOŚĆ I DŁUGOŚĆ ARTYKUŁU
-Na podstawie wstępnej analizy, temat "{{TEMAT_ARTYKULU}}" został sklasyfikowany jako temat {{ANALIZA_TEMATU}}.
-- Jeśli temat jest **SZEROKI**, napisz wyczerpujący, szczegółowy i długi artykuł (w stylu 'pillar page'), który dogłębnie omawia każde z podanych zagadnień kluczowych.
-- Jeśli temat jest **WĄSKI**, napisz zwięzły, konkretny i krótszy artykuł, który szybko i precyzyjnie odpowiada na główne pytanie zawarte w tytule, rozwijając wprost podane zagadnienia.
+Na podstawie wstępnej analizy, temat "{{TEMAT_ARTYKULU}}" został sklasyfikowany jako temat {{ANALIZA_TEMATU}}. Dostosuj długość i głębię artykułu do tej klasyfikacji.
 
 # GRUPA DOCELOWA
-Artykuł jest skierowany do {{GRUPA_DOCELOWA}}. Używaj języka, który jest dla nich zrozumiały, ale nie unikaj terminologii branżowej – wyjaśniaj ją w prosty sposób.
+Artykuł jest skierowany do {{GRUPA_DOCELOWA}}. Dostosuj język i styl do tej grupy.
 
 # STRUKTURA I GŁĘBIA
-**Zasada Odwróconej Piramidy (Answer-First Lead):** Rozpocznij artykuł naturalnie, ale wpleć w pierwszy akapit (lead) bezpośrednią i zwięzłą odpowiedź na główne pytanie z tematu. Unikaj wstępów typu "W tym artykule dowiesz się...", "Oto odpowiedź na Twoje pytanie:". Czytelnik musi otrzymać kluczową wartość od razu, w sposób płynny i angażujący.
-Artykuł musi mieć logiczną strukturę. Rozwiń temat w kilku kluczowych sekcjach, a zakończ praktycznym podsumowaniem.
-Kluczowe zagadnienia do poruszenia:
+**Zasada Odwróconej Piramidy (Answer-First):** Rozpocznij artykuł, wplatając w pierwszy akapit bezpośrednią i zwięzłą odpowiedź na główne pytanie z tematu.
+Artykuł musi mieć logiczną strukturę. Rozwiń poniższe kluczowe zagadnienia:
 {{ZAGADNIENIA_KLUCZOWE}}
 
-# STYL I TON
-- **Doświadczenie (Experience):** Wplataj w treść zwroty wskazujące na osobiste doświadczenie, np. "Z mojego doświadczenia...", "Częstym błędem, który obserwuję, jest...".
-- **Ekspertyza (Expertise):** Używaj precyzyjnej terminologii.
-- **Autorytatywność (Authoritativeness):** Pisz w sposób pewny i zdecydowany.
-- **Zaufanie (Trustworthiness):** Bądź transparentny. Jeśli produkt lub metoda ma wady, wspomnij o nich.
+**SEKCJA 'REASONING' DLA AI (BARDZO WAŻNE):**
+Szczególną uwagę zwróć na sekcję wyjaśniającą "dlaczego" lub "jak coś działa". Musi być ona samowystarczalna, klarowna i przedstawiona w formie konkretnych kroków lub argumentów. To kluczowy fragment dla systemów AI (Passage Ranking).
+
+# GŁĘBIA SEMANTYCZNA I RELACJE LEKSYKALNE
+Aby zademonstrować pełne zrozumienie tematu, wpleć w treść podane poniżej terminy. Użyj **hiperonimów**, aby wprowadzić szerszy kontekst, oraz **hiponimów**, aby podać konkretne przykłady.
+- Hiperonimy do wykorzystania: {{HIPERONIMY}}
+- Hiponimy do wykorzystania: {{HIPONIMY}}
+- Dodatkowe synonimy: {{SYNOMINY}}
 
 # SŁOWA KLUCZOWE
 Naturalnie wpleć w treść następujące słowa kluczowe: {{SLOWA_KLUCZOWE}}.
-Dodatkowo, wpleć w treść poniższe frazy semantyczne, aby zwiększyć głębię tematyczną: {{DODATKOWE_SLOWA_SEMANTYCZNE}}.
+Dodatkowo, wpleć w treść poniższe frazy semantyczne: {{DODATKOWE_SLOWA_SEMANTYCZNE}}.
+
+# STYL, TON I E-E-A-T
+- **Doświadczenie (Experience):** Wplataj zwroty wskazujące na osobiste doświadczenie ("Z mojego doświadczenia...", "Częstym błędem jest...").
+- **Ekspertyza (Expertise):** Używaj precyzyjnej terminologii, wyjaśniając ją w prosty sposób.
+- **Autorytatywność (Authoritativeness):** Pisz w sposób pewny i zdecydowany.
+- **Zaufanie (Trustworthiness):** Bądź transparentny, wspominaj o potencjalnych wadach opisywanych rozwiązań.
 
 # FORMATOWANIE
-Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym. Używaj pogrubień (<b> lub <strong>), aby wyróżnić kluczowe terminy i najważniejsze informacje, co ułatwia skanowanie tekstu. Jeśli dane można przedstawić w formie porównania lub kroków, rozważ użycie prostej tabeli (<table>) dla lepszej czytelności."""
+Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym. Używaj pogrubień (<b>, <strong>) dla kluczowych terminów. Rozważ użycie tabeli (<table>) dla danych porównawczych."""
 
 DEFAULT_BRIEF_PROMPT_TEMPLATE = """Jesteś światowej klasy strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na podstawie podanego tematu.
 
 # KROK 1: ANALIZA TEMATU
 Przeanalizuj podany temat: "{{TOPIC}}" pod kątem jego złożoności i intencji wyszukiwania. Określ, czy temat jest:
-- **SZEROKI**: Wymaga wyczerpującego, długiego artykułu, który pełni rolę kompleksowego poradnika (np. 'pillar page'). Odpowiada na wiele powiązanych pytań.
-- **WĄSKI**: Odpowiada na jedno, bardzo konkretne pytanie. Wymaga krótszego, zwięzłego i precyzyjnego artykułu, który szybko dostarcza odpowiedź.
+- **SZEROKI**: Wymaga wyczerpującego, długiego artykułu (np. 'pillar page').
+- **WĄSKI**: Odpowiada na jedno, konkretne pytanie i wymaga krótszego artykułu.
 
 # KROK 2: TWORZENIE BRIEFU W FORMACIE JSON
 Na podstawie analizy z Kroku 1, stwórz brief w formacie JSON.
-**KRYTYCZNA ZASADA: Wartość klucza `temat_artykulu` MUSI być DOKŁADNIE taka sama jak temat podany przez użytkownika. NIE ZMIENIAJ, NIE POPRAWIAJ, NIE SKRACAJ ani NIE WYDŁUŻAJ tytułu.**
+**KRYTYCZNA ZASADA: Wartość klucza `temat_artykulu` MUSI być DOKŁADNIE taka sama jak temat podany przez użytkownika.**
 
 Struktura JSON:
 {
@@ -229,15 +235,27 @@ Struktura JSON:
   "analiza_tematu": "Krótki opis, czy temat jest szeroki czy wąski i dlaczego.",
   "grupa_docelowa": "Krótki opis, dla kogo jest artykuł.",
   "zagadnienia_kluczowe": [
-      // Dla tematów SZEROKICH: 5-7 rozbudowanych nagłówków (H2), które kompleksowo pokrywają temat.
-      // Dla tematów WĄSKICH: 2-4 zwięzłe nagłówki (H2), które bezpośrednio odpowiadają na pytanie.
+      // Dla tematów SZEROKICH: 5-7 nagłówków (H2).
+      // Dla tematów WĄSKICH: 2-4 nagłówki (H2).
+      // WAŻNE: Jedno z zagadnień MUSI odpowiadać na pytanie "Dlaczego..." lub "Jak to działa krok po kroku...", aby stworzyć sekcję 'reasoning'.
   ],
   "slowa_kluczowe": [
       // Array 5-10 głównych słów kluczowych.
   ],
   "dodatkowe_slowa_semantyczne": [
       // Array 5-10 fraz i kolokacji semantycznie wspierających główny temat.
-  ]
+  ],
+  "relacje_leksykalne": {
+      "synonimy": [
+          // Array 3-5 synonimów dla głównego słowa kluczowego.
+      ],
+      "hiperonimy": [
+          // Array 2-3 terminów ogólniejszych, nadrzędnych (np. dla "rower" -> "pojazd", "sprzęt sportowy").
+      ],
+      "hiponimy": [
+          // Array 2-3 terminów bardziej szczegółowych, podrzędnych (np. dla "rower" -> "rower górski", "rower szosowy").
+      ]
+  }
 }
 
 Wygeneruj wyłącznie kompletny i poprawny brief w formacie JSON dla tematu: "{{TOPIC}}"
@@ -345,7 +363,7 @@ st.caption("Centralne zarządzanie i generowanie treści dla Twojej sieci blogó
 conn = get_db_connection()
 
 st.sidebar.header("Menu Główne")
-menu_options = ["Dashboard", "Zarządzanie Stronami", "Zarządzanie Personami", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "⚙️ Edytor Promptów"]
+menu_options = ["Dashboard", "Zarządzanie Stronami", "Zarządzanie Personami", "🗺️ Strateg Tematyczny", "Generator Briefów", "Generowanie Treści", "Harmonogram Publikacji", "Zarządzanie Treścią", "⚙️ Edytor Promptów"]
 
 # --- POPRAWIONA LOGIKA DO PROGRAMOWEJ NAWIGACJI ---
 default_index = 0
@@ -530,12 +548,110 @@ elif st.session_state.menu_choice == "Zarządzanie Personami":
                     db_execute(conn, "DELETE FROM personas WHERE id = ?", (id,))
                     st.rerun()
 
+elif st.session_state.menu_choice == "🗺️ Strateg Tematyczny":
+    st.header("🗺️ Strateg Tematyczny")
+    st.info("To narzędzie analizuje wszystkie opublikowane wpisy na wybranej stronie, grupuje je w klastry tematyczne i proponuje nowe tematy, aby wypełnić luki i wzmocnić autorytet w danej dziedzinie.")
+
+    sites_list = db_execute(conn, "SELECT id, name, url, username, app_password FROM sites", fetch="all")
+    sites_options = {site[1]: site for site in sites_list}
+
+    if not sites_options:
+        st.warning("Brak załadowanych stron. Przejdź do 'Zarządzanie Stronami'.")
+    else:
+        site_name = st.selectbox("Wybierz stronę do analizy", options=sites_options.keys())
+
+        if st.button("Analizuj i Zaplanuj Klastry", type="primary"):
+            site_info = sites_options[site_name]
+            api = WordPressAPI(site_info[2], site_info[3], decrypt_data(site_info[4]))
+
+            with st.spinner(f"Pobieranie tytułów artykułów ze strony '{site_name}'..."):
+                all_posts = []
+                page = 1
+                while True:
+                    posts_data, _ = api._make_request("posts", params={"per_page": 100, "page": page, "_fields": "title.rendered"})
+                    if not posts_data:
+                        break
+                    all_posts.extend(posts_data)
+                    page += 1
+                
+                all_titles = [p['title']['rendered'] for p in all_posts]
+
+            if not all_titles:
+                st.error("Nie znaleziono żadnych artykułów na tej stronie.")
+            else:
+                with st.spinner("AI analizuje strukturę tematyczną i szuka luk..."):
+                    CLUSTER_ANALYSIS_PROMPT = f"""Jesteś ekspertem SEO i strategiem treści. Twoim zadaniem jest analiza poniższej listy tytułów artykułów z bloga.
+
+Twoje zadania:
+1.  **Pogrupuj tytuły w logiczne klastry tematyczne.** Nazwa klastra powinna być ogólnym, nadrzędnym tematem (np. "Marketing w mediach społecznościowych", "Pozycjonowanie stron WWW", "Zdrowe odżywianie").
+2.  **Dla każdego klastra, zidentyfikuj luki w treści.** Pomyśl, jakich fundamentalnych lub uzupełniających tematów brakuje, aby klaster był kompletny i wyczerpujący.
+3.  **Zaproponuj 3-5 nowych, konkretnych tematów artykułów,** które wypełnią te luki i wzmocnią autorytet w ramach klastra. Nowe tematy powinny być angażujące i odpowiadać na potencjalne pytania użytkowników.
+
+Przeanalizuj tę listę tytułów:
+{'- ' + '\n- '.join(all_titles)}
+
+Zwróć wynik WYŁĄCZNIE w formacie JSON. Struktura powinna być listą klastrów, gdzie każdy klaster jest obiektem z kluczami: "nazwa_klastra", "istniejace_artykuly" (lista tytułów), oraz "proponowane_nowe_tematy" (lista nowych tytułów).
+
+Przykład:
+[
+  {{
+    "nazwa_klastra": "SEO dla początkujących",
+    "istniejace_artykuly": ["Jak wybrać dobre słowa kluczowe?", "Co to jest link building?"],
+    "proponowane_nowe_tematy": ["Kompletny przewodnik po SEO On-Page dla nowicjuszy", "Czym jest audyt SEO i jak go przeprowadzić samemu?", "Najczęstsze błędy w SEO, których musisz unikać"]
+  }}
+]
+"""
+                    try:
+                        response_str = call_gpt5_nano(openai_api_key, CLUSTER_ANALYSIS_PROMPT).strip().replace("```json", "").replace("```", "")
+                        cluster_data = json.loads(response_str)
+                        st.session_state.cluster_analysis_result = cluster_data
+                    except Exception as e:
+                        st.error(f"Błąd podczas analizy przez AI: {e}")
+                        st.session_state.cluster_analysis_result = None
+
+    if 'cluster_analysis_result' in st.session_state and st.session_state.cluster_analysis_result:
+        st.subheader("Wyniki Analizy i Propozycje Treści")
+        
+        all_new_topics = []
+        for cluster in st.session_state.cluster_analysis_result:
+            with st.expander(f"**Klaster: {cluster['nazwa_klastra']}** ({len(cluster['istniejace_artykuly'])} istniejących, {len(cluster['proponowane_nowe_tematy'])} propozycji)"):
+                st.markdown("##### Istniejące artykuły w klastrze:")
+                for title in cluster['istniejace_artykuly']:
+                    st.write(f"- {title}")
+                
+                st.markdown("##### 💡 Proponowane nowe tematy do wypełnienia luki:")
+                for new_topic in cluster['proponowane_nowe_tematy']:
+                    st.write(f"- **{new_topic}**")
+                    all_new_topics.append(new_topic)
+
+        st.subheader("Akcje")
+        if all_new_topics:
+            if st.button("Dodaj wszystkie proponowane tematy do Generatora Briefów", type="primary"):
+                if 'topics_from_strategist' not in st.session_state:
+                    st.session_state.topics_from_strategist = ""
+                
+                existing_topics = st.session_state.topics_from_strategist.split('\n')
+                new_topics_set = set(all_new_topics)
+                
+                final_topics = existing_topics + [t for t in new_topics_set if t not in existing_topics]
+                st.session_state.topics_from_strategist = "\n".join(filter(None, final_topics))
+                
+                st.session_state.go_to_page = "Generator Briefów"
+                st.success(f"{len(new_topics_set)} unikalnych tematów dodanych! Przechodzenie do Generatora Briefów...")
+                st.rerun()
+
 elif st.session_state.menu_choice == "Generator Briefów":
     st.header("📝 Generator Briefów")
+
+    initial_topics = ""
+    if 'topics_from_strategist' in st.session_state and st.session_state.topics_from_strategist:
+        initial_topics = st.session_state.topics_from_strategist
+        del st.session_state.topics_from_strategist
+
     if not (openai_api_key and google_api_key):
         st.error("Wprowadź klucz OpenAI API oraz Google AI API w panelu bocznym.")
     else:
-        topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", height=250)
+        topics_input = st.text_area("Wprowadź tematy artykułów (jeden na linię)", value=initial_topics, height=250)
 
         st.subheader("Ustawienia generowania")
         c1, c2 = st.columns(2)
@@ -597,7 +713,20 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                             tasks = []
                             for i in indices:
                                 brief = valid_briefs[i]['brief']
-                                prompt = st.session_state.master_prompt.replace("{{PERSONA_DESCRIPTION}}", personas[persona_name]).replace("{{TEMAT_ARTYKULU}}", brief.get("temat_artykulu", "")).replace("{{ANALIZA_TEMATU}}", "SZEROKI" if "szeroki" in brief.get("analiza_tematu", "").lower() else "WĄSKI").replace("{{GRUPA_DOCELOWA}}", brief.get("grupa_docelowa", "")).replace("{{ZAGADNIENIA_KLUCZOWE}}", "\n".join(f"- {z}" for z in brief.get("zagadnienia_kluczowe", []))).replace("{{SLOWA_KLUCZOWE}}", ", ".join(brief.get("slowa_kluczowe", []))).replace("{{DODATKOWE_SLOWA_SEMANTYCZNE}}", ", ".join(brief.get("dodatkowe_slowa_semantyczne", [])))
+                                relacje = brief.get("relacje_leksykalne", {})
+                                
+                                prompt = st.session_state.master_prompt \
+                                    .replace("{{PERSONA_DESCRIPTION}}", personas[persona_name]) \
+                                    .replace("{{TEMAT_ARTYKULU}}", brief.get("temat_artykulu", "")) \
+                                    .replace("{{ANALIZA_TEMATU}}", "SZEROKI" if "szeroki" in brief.get("analiza_tematu", "").lower() else "WĄSKI") \
+                                    .replace("{{GRUPA_DOCELOWA}}", brief.get("grupa_docelowa", "")) \
+                                    .replace("{{ZAGADNIENIA_KLUCZOWE}}", "\n".join(f"- {z}" for z in brief.get("zagadnienia_kluczowe", []))) \
+                                    .replace("{{SLOWA_KLUCZOWE}}", ", ".join(brief.get("slowa_kluczowe", []))) \
+                                    .replace("{{DODATKOWE_SLOWA_SEMANTYCZNE}}", ", ".join(brief.get("dodatkowe_slowa_semantyczne", []))) \
+                                    .replace("{{HIPERONIMY}}", ", ".join(relacje.get("hiperonimy", []))) \
+                                    .replace("{{HIPONIMY}}", ", ".join(relacje.get("hiponimy", []))) \
+                                    .replace("{{SYNOMINY}}", ", ".join(relacje.get("synonimy", [])))
+                                
                                 tasks.append({'title': brief['temat_artykulu'], 'prompt': prompt, 'keywords': brief.get('slowa_kluczowe', []), 'image': valid_briefs[i]['image']})
 
                             st.session_state.generated_articles = []
@@ -659,11 +788,9 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                                     site_info = sites_options[site_name]
                                     api_pub = WordPressAPI(site_info[2], site_info[3], decrypt_data(site_info[4]))
                                     
-                                    # Pobieranie kategorii dla konkretnej strony
                                     site_cats = api_pub.get_categories()
                                     cat_ids = [site_cats[name] for name in selected_cats if name in site_cats]
 
-                                    # --- POPRAWIONE WYWOŁANIE FUNKCJI Z NAZWANYMI ARGUMENTAMI ---
                                     success, msg, _ = api_pub.publish_post(
                                         title=row['title'],
                                         content=article['content'],
@@ -726,7 +853,7 @@ elif st.session_state.menu_choice == "⚙️ Edytor Promptów":
     tab1, tab2 = st.tabs(["Master Prompt (Artykuły)", "Prompt do Briefu"])
     with tab1:
         st.subheader("Master Prompt do generowania artykułów")
-        st.markdown("**Zmienne:** `{{PERSONA_DESCRIPTION}}`, `{{TEMAT_ARTYKULU}}`, `{{ANALIZA_TEMATU}}`, `{{GRUPA_DOCELOWA}}`, `{{ZAGADNIENIA_KLUCZOWE}}`, `{{SLOWA_KLUCZOWE}}`, `{{DODATKOWE_SLOWA_SEMANTYCZNE}}`")
+        st.markdown("**Zmienne:** `{{PERSONA_DESCRIPTION}}`, `{{TEMAT_ARTYKULU}}`, `{{ANALIZA_TEMATU}}`, `{{GRUPA_DOCELOWA}}`, `{{ZAGADNIENIA_KLUCZOWE}}`, `{{SLOWA_KLUCZOWE}}`, `{{DODATKOWE_SLOWA_SEMANTYCZNE}}`, `{{HIPERONIMY}}`, `{{HIPONIMY}}`, `{{SYNOMINY}}`")
         st.session_state.master_prompt = st.text_area("Edytuj Master Prompt", value=st.session_state.master_prompt, height=600, label_visibility="collapsed")
         if st.button("Przywróć domyślny Master Prompt"):
             st.session_state.master_prompt = DEFAULT_MASTER_PROMPT_TEMPLATE
