@@ -728,27 +728,67 @@ elif st.session_state.menu_choice == "🗺️ Strateg Tematyczny":
                 st.error("Nie znaleziono żadnych artykułów na tej stronie.")
             else:
                 with st.spinner("AI analizuje strukturę tematyczną i szuka luk..."):
-                    CLUSTER_ANALYSIS_PROMPT = f"""Jesteś ekspertem SEO i strategiem treści. Twoim zadaniem jest analiza poniższej listy tytułów artykułów z bloga.
+                    CLUSTER_ANALYSIS_PROMPT = f"""Jesteś ekspertem SEO i strategiem treści specjalizującym się w optymalizacji pod AI search (GEO/AIO).
 
-Twoje zadania:
-1.  **Pogrupuj tytuły w logiczne klastry tematyczne.** Nazwa klastra powinna być ogólnym, nadrzędnym tematem (np. "Marketing w mediach społecznościowych", "Pozycjonowanie stron WWW", "Zdrowe odżywianie").
-2.  **Dla każdego klastra, zidentyfikuj luki w treści.** Pomyśl, jakich fundamentalnych lub uzupełniających tematów brakuje, aby klaster był kompletny i wyczerpujący.
-3.  **Zaproponuj 3-5 nowych, konkretnych tematów artykułów,** które wypełnią te luki i wzmocnią autorytet w ramach klastra. Nowe tematy powinny być angażujące i odpowiadać na potencjalne pytania użytkowników.
+Twoim zadaniem jest analiza listy tytułów artykułów z bloga i zaproponowanie nowych tematów zoptymalizowanych pod systemy AI (Google SGE, Bing Copilot, ChatGPT).
 
-Przeanalizuj tę listę tytułów:
+# KROK 1: ANALIZA I GRUPOWANIE
+Przeanalizuj poniższe tytuły i pogrupuj je w logiczne klastry tematyczne:
 {'- ' + '\n- '.join(all_titles)}
 
-Zwróć wynik WYŁĄCZNIE w formacie JSON. Struktura powinna być listą klastrów, gdzie każdy klaster jest obiektem z kluczami: "nazwa_klastra", "istniejace_artykuly" (lista tytułów), oraz "proponowane_nowe_tematy" (lista nowych tytułów).
+Nazwa klastra = ogólny, nadrzędny temat (np. "Marketing w mediach społecznościowych", "Pozycjonowanie lokalne", "Zdrowa dieta")
 
-Przykład:
+# KROK 2: IDENTYFIKACJA LUK
+Dla każdego klastra określ:
+- Jakich fundamentalnych tematów brakuje?
+- Które pytania użytkowników pozostają bez odpowiedzi?
+- Które aspekty tematu są słabo pokryte?
+
+# KROK 3: PROPOZYCJE TEMATÓW (KRYTYCZNE ZASADY)
+Proponowane tematy MUSZĄ być zoptymalizowane pod AI search:
+
+1. **Format pytań**: Preferuj tytuły w formie pytania ("Jak...", "Dlaczego...", "Co...", "Czym różni się...")
+   ✅ DOBRE: "Jak wybrać zmywarkę do małej kuchni? Przewodnik 2025"
+   ❌ ZŁE: "Zmywarki do małych kuchni"
+
+2. **Konkretność**: Unikaj ogólników, dodawaj kontekst i liczby
+   ✅ DOBRE: "7 najczęstszych błędów w link buildingu (i jak ich unikać)"
+   ❌ ZŁE: "Błędy w link buildingu"
+
+3. **Intencja wyszukiwania**: Dopasuj do tego, czego użytkownicy szukają
+   - Informacyjna: "Jak działa...", "Co to jest...", "Dlaczego..."
+   - Transakcyjna: "Najlepsze...", "Top 5...", "Porównanie..."
+   - Problem-solving: "Jak naprawić...", "Co zrobić gdy...", "Rozwiązanie..."
+
+4. **Answer-first friendly**: Tytuł powinien sugerować konkretną odpowiedź
+   ✅ DOBRE: "Ile kosztuje pozycjonowanie strony? Cennik i czynniki wpływające na cenę"
+   ❌ ZŁE: "Koszty pozycjonowania"
+
+5. **Snippable topics**: Tematy, które łatwo będą parsowane przez AI
+   - Zawierają kluczowe słowa
+   - Obiecują konkretną, mierzalną wartość
+   - Są samodzielne i zrozumiałe
+
+# WYMAGANY FORMAT JSON
+
+Zwróć WYŁĄCZNIE kompletny JSON (bez komentarzy, bez markdown):
+
 [
   {{
-    "nazwa_klastra": "SEO dla początkujących",
-    "istniejace_artykuly": ["Jak wybrać dobre słowa kluczowe?", "Co to jest link building?"],
-    "proponowane_nowe_tematy": ["Kompletny przewodnik po SEO On-Page dla nowicjuszy", "Czym jest audyt SEO i jak go przeprowadzić samemu?", "Najczęstsze błędy w SEO, których musisz unikać"]
+    "nazwa_klastra": "Nazwa nadrzędnego tematu",
+    "istniejace_artykuly": ["Tytuł 1", "Tytuł 2"],
+    "luki_w_tresci": "Krótki opis (1-2 zdania), czego brakuje w tym klastrze",
+    "proponowane_nowe_tematy": [
+      "Jak [konkretne pytanie] - Przewodnik krok po kroku",
+      "Czym różni się X od Y? Porównanie + tabela",
+      "7 sprawdzonych sposobów na [cel] w 2025",
+      "Co zrobić gdy [problem]? Rozwiązanie + przykłady",
+      "Dlaczego [zjawisko] - Wyjaśnienie dla początkujących"
+    ]
   }}
 ]
-"""
+
+WYGENERUJ TERAZ KOMPLETNĄ ANALIZĘ W FORMACIE JSON."""
                     try:
                         response_str = call_gpt5_nano(openai_api_key, CLUSTER_ANALYSIS_PROMPT).strip().replace("```json", "").replace("```", "")
                         cluster_data = json.loads(response_str)
