@@ -179,89 +179,216 @@ class WordPressAPI:
 
 # --- LOGIKA GENEROWANIA TREŚCI I PROMPTY ---
 
-HTML_RULES = "Zasady formatowania HTML:\n- NIE UŻYWAJ <h1>.\n- UŻYWAJ WYŁĄCZNIE: <h2>, <h3>, <p>, <b>, <strong>, <ul>, <ol>, <li>, <table>, <tr>, <th>, <td>."
-SYSTEM_PROMPT_BASE = f"Jesteś ekspertem SEO i copywriterem. Twoim zadaniem jest tworzenie wysokiej jakości, unikalnych artykułów na bloga. Pisz w języku polskim.\n{HTML_RULES}"
+HTML_RULES = """ZASADY FORMATOWANIA HTML (KRYTYCZNE):
+- NIE UŻYWAJ znacznika <h1> - NIGDY
+- UŻYWAJ WYŁĄCZNIE: <h2>, <h3>, <p>, <b>, <strong>, <ul>, <ol>, <li>, <table>, <tr>, <th>, <td>
+- Nagłówki <h2> jako główne sekcje, <h3> jako podsekcje
+- Unikaj nadmiernego używania list - stosuj je tylko dla kroków, porównań i kluczowych punktów
+- Używaj prostej interpunkcji: kropki, przecinki, średniki. Unikaj ozdobnych symboli (→, ★, !!!)
+- Każdy akapit <p> powinien zawierać 2-4 zdania maksymalnie
+- Tabele <table> dla porównań i danych liczbowych"""
 
-DEFAULT_MASTER_PROMPT_TEMPLATE = """# ROLA I CEL
-{{PERSONA_DESCRIPTION}} Twoim celem jest napisanie wyczerpującego, wiarygodnego i praktycznego artykułu na temat "{{TEMAT_ARTYKULU}}", który demonstruje głęboką wiedzę (E-E-A-T).
+SYSTEM_PROMPT_BASE = f"""Jesteś ekspertem SEO i copywriterem specjalizującym się w tworzeniu treści zoptymalizowanych pod AI search (GEO/AIO). Piszesz w języku polskim.
 
-# ZŁOŻONOŚĆ I DŁUGOŚĆ ARTYKUŁU
-Na podstawie wstępnej analizy, temat "{{TEMAT_ARTYKULU}}" został sklasyfikowany jako temat {{ANALIZA_TEMATU}}. Dostosuj długość i głębię artykułu do tej klasyfikacji.
+ABSOLUTNIE ZABRONIONE W ODPOWIEDZI:
+- Jakiekolwiek komentarze, wyjaśnienia lub meta-informacje
+- Frazy typu: "Oto artykuł", "Poniżej przedstawiam", "Mam nadzieję"
+- Znaczniki markdown (```) lub otaczanie kodu
+- Powtarzanie tytułu artykułu w treści
+- Wprowadzenia techniczne
+
+WYMAGANY FORMAT ODPOWIEDZI:
+- Zwróć WYŁĄCZNIE gotowy artykuł w czystym HTML
+- Rozpocznij bezpośrednio pierwszym znacznikiem HTML (najczęściej <h2>)
+- Zakończ ostatnim zamykającym znacznikiem HTML
+
+{HTML_RULES}
+
+ZASADY OPTYMALIZACJI POD AI SEARCH:
+1. STRUKTURA = Modułowość - AI parsuje treść na małe fragmenty
+2. JASNOŚĆ semantyczna - Konkretne fakty zamiast ogólników
+3. SNIPPABLE content - Każde zdanie samodzielne i gotowe do wyciągnięcia
+4. Format Q&A - Bezpośrednie pytania z krótkimi odpowiedziami (1-2 zdania)
+5. Używaj synonimów i powiązanych terminów dla wzmocnienia kontekstu"""
+
+DEFAULT_MASTER_PROMPT_TEMPLATE = """# ROLA I EKSPERTYZA
+{{PERSONA_DESCRIPTION}}
+
+Twoim celem jest stworzenie artykułu zoptymalizowanego pod AI search (Google SGE, Bing Copilot, ChatGPT) na temat: "{{TEMAT_ARTYKULU}}"
+
+# KLASYFIKACJA I DŁUGOŚĆ
+Temat został sklasyfikowany jako: {{ANALIZA_TEMATU}}
+- SZEROKI temat: artykuł 2500-4000 słów, wyczerpujący pillar content
+- WĄSKI temat: artykuł 800-1500 słów, precyzyjna odpowiedź na konkretne pytanie
 
 # GRUPA DOCELOWA
-Artykuł jest skierowany do {{GRUPA_DOCELOWA}}. Dostosuj język i styl do tej grupy.
+Piszesz dla: {{GRUPA_DOCELOWA}}
 
-# STRUKTURA I GŁĘBIA
-**Zasada Odwróconej Piramidy (Answer-First):** Rozpocznij artykuł, wplatając w pierwszy akapit bezpośrednią i zwięzłą odpowiedź na główne pytanie z tematu.
-Artykuł musi mieć logiczną strukturę. Rozwiń poniższe kluczowe zagadnienia:
+# KLUCZOWA ZASADA: ANSWER-FIRST (Odwrócona piramida)
+Pierwszy akapit MUSI zawierać bezpośrednią, zwięzłą odpowiedź na główne pytanie z tematu. Użytkownik i AI muszą natychmiast uzyskać wartość.
+
+# STRUKTURA ARTYKUŁU - OPTYMALIZACJA POD AI PARSING
+
+## 1. NAGŁÓWKI (H2/H3) - Jasne granice sekcji
+- Każdy H2 = nowy moduł treści, który AI może wyciągnąć samodzielnie
+- Używaj pytań jako nagłówków: "Jak działa X?", "Dlaczego Y jest ważne?", "Czym różni się A od B?"
+- ZABRONIONE nagłówki ogólne: "Dowiedz się więcej", "Podsumowanie", "Wprowadzenie"
+
+ROZWIŃ TE ZAGADNIENIA (jako sekcje H2/H3):
 {{ZAGADNIENIA_KLUCZOWE}}
 
-**SEKCJA 'REASONING' DLA AI (BARDZO WAŻNE):**
-Szczególną uwagę zwróć na sekcję wyjaśniającą "dlaczego" lub "jak coś działa". Musi być ona samowystarczalna, klarowna i przedstawiona w formie konkretnych kroków lub argumentów. To kluczowy fragment dla systemów AI (Passage Ranking).
+## 2. SEKCJA "REASONING" (KRYTYCZNA dla AI Passage Ranking)
+Jedno z zagadnień MUSI być szczegółowym wyjaśnieniem "Jak to działa?" lub "Dlaczego?" z konkretnymi krokami:
+- Używaj numerowanych list dla procesów krok po kroku
+- Każdy krok = samodzielne zdanie z kontekstem
+- Przykład: "Krok 1: Silnik analizuje dane wejściowe i porównuje je z bazą 50 000 wzorców."
 
-# GŁĘBIA SEMANTYCZNA I RELACJE LEKSYKALNE
-Aby zademonstrować pełne zrozumienie tematu, wpleć w treść podane poniżej terminy. Użyj **hiperonimów**, aby wprowadzić szerszy kontekst, oraz **hiponimów**, aby podać konkretne przykłady.
-- Hiperonimy do wykorzystania: {{HIPERONIMY}}
-- Hiponimy do wykorzystania: {{HIPONIMY}}
-- Dodatkowe synonimy: {{SYNOMINY}}
+## 3. FORMAT Q&A (Minimum 3-5 par pytanie-odpowiedź)
+Umieść w artykule bezpośrednie pytania z krótkimi odpowiedziami:
+- Pytanie jako <h3>
+- Odpowiedź w <p>: maksymalnie 1-2 zdania, self-contained (zrozumiała poza kontekstem)
+- Przykład:
+  <h3>Jak głośno pracuje zmywarka?</h3>
+  <p>Zmywarka pracuje na poziomie 42 dB, co jest cichsze niż większość modeli na rynku.</p>
 
-# SŁOWA KLUCZOWE
-Naturalnie wpleć w treść następujące słowa kluczowe: {{SLOWA_KLUCZOWE}}.
-Dodatkowo, wpleć w treść poniższe frazy semantyczne: {{DODATKOWE_SLOWA_SEMANTYCZNE}}.
+## 4. LISTY I TABELE - Czyste, snippable fragmenty
+- Listy <ul>/<ol>: TYLKO dla kroków, porównań, top 3-5 faktów
+- NIE używaj list jako głównej formy treści
+- Tabele <table>: idealne do porównań funkcji, cen, parametrów technicznych
+  
+Przykład tabeli:
+<table>
+<tr><th>Funkcja</th><th>Model A</th><th>Model B</th></tr>
+<tr><td>Poziom hałasu</td><td>42 dB</td><td>48 dB</td></tr>
+<tr><td>Certyfikat Energy Star</td><td>Tak</td><td>Nie</td></tr>
+</table>
 
-# STYL, TON I E-E-A-T
-- **Doświadczenie (Experience):** Wplataj zwroty wskazujące na osobiste doświadczenie ("Z mojego doświadczenia...", "Częstym błędem jest...").
-- **Ekspertyza (Expertise):** Używaj precyzyjnej terminologii, wyjaśniając ją w prosty sposób.
-- **Autorytatywność (Authoritativeness):** Pisz w sposób pewny i zdecydowany.
-- **Zaufanie (Trustworthiness):** Bądź transparentny, wspominaj o potencjalnych wadach opisywanych rozwiązań.
+# SEMANTYCZNA JASNOŚĆ I E-E-A-T
 
-# FORMATOWANIE
-Stosuj się ściśle do zasad formatowania HTML podanych w głównym prompcie systemowym. Używaj pogrubień (<b>, <strong>) dla kluczowych terminów. Rozważ użycie tabeli (<table>) dla danych porównawczych."""
+## Reguła: KONKRET zamiast OGÓLNIKA
+❌ ZŁE: "Ta zmywarka jest innowacyjna i ekologiczna"
+✅ DOBRE: "Zmywarka zużywa 9 litrów wody na cykl (o 30% mniej niż średnia) i posiada certyfikat Energy Star"
 
-DEFAULT_BRIEF_PROMPT_TEMPLATE = """Jesteś światowej klasy strategiem treści SEO. Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu na podstawie podanego tematu.
+## Używaj mierzalnych danych:
+- Liczby: "wzrost o 25%", "temperatura 65°C", "czas 90 minut"
+- Normy i certyfikaty: "Energy Star", "CE", "IP67"
+- Porównania: "3x szybszy niż X", "o 40% cichszy od Y"
 
-# KROK 1: ANALIZA TEMATU
-Przeanalizuj podany temat: "{{TOPIC}}" pod kątem jego złożoności i intencji wyszukiwania. Określ, czy temat jest:
-- **SZEROKI**: Wymaga wyczerpującego, długiego artykułu (np. 'pillar page').
-- **WĄSKI**: Odpowiada na jedno, konkretne pytanie i wymaga krótszego artykułu.
+## KONTEKST i SYNONIMY (Semantic Reinforcement)
+Naturnie wpleć powiązane terminy, aby AI rozumiało szerszy kontekst:
 
-# KROK 2: TWORZENIE BRIEFU W FORMACIE JSON
-Na podstawie analizy z Kroku 1, stwórz brief w formacie JSON.
-**KRYTYCZNA ZASADA: Wartość klucza `temat_artykulu` MUSI być DOKŁADNIE taka sama jak temat podany przez użytkownika.**
+Główne słowa kluczowe: {{SLOWA_KLUCZOWE}}
+Frazy semantyczne wspierające: {{DODATKOWE_SLOWA_SEMANTYCZNE}}
+
+RELACJE LEKSYKALNE (wzmocnienie zrozumienia przez AI):
+- Synonimy (używaj zamiennie): {{SYNOMINY}}
+- Hiperonimy (szerszy kontekst): {{HIPERONIMY}}
+  Przykład: dla "rower" użyj też "pojazd", "środek transportu"
+- Hiponimy (konkretne przykłady): {{HIPONIMY}}
+  Przykład: dla "rower" wymień "rower górski", "rower szosowy", "rower elektryczny"
+
+## E-E-A-T Signals (Experience, Expertise, Authoritativeness, Trust)
+- DOŚWIADCZENIE: "Z mojej praktyki...", "Podczas testów zauważyłem..."
+- EKSPERTYZA: Precyzyjna terminologia + proste wyjaśnienia
+- AUTORYTATYWNOŚĆ: Pewny ton, zdecydowane stwierdzenia
+- ZAUFANIE: Transparentność, wspomnienie ograniczeń: "Nie jest idealny dla...", "Wadą jest..."
+
+# FORMATOWANIE POD AI PARSING
+
+## Interpunkcja - PROSTOTA
+- Używaj kropek i przecinków konsekwentnie
+- Unikaj myślników em dash (—) - lepiej użyj kropki lub średnika
+- ZABRONIONE: ozdobne symbole →, ★, !!!, ===
+
+## Długość zdań
+- Jedno zdanie = jedna idea (max 20-25 słów)
+- Akapit = 2-4 zdania
+- UNIKAJ ścian tekstu - rozbijaj na krótkie paragrafy
+
+## Self-Contained Sentences (Snippable)
+Każde zdanie MUSI mieć sens wyrwane z kontekstu:
+❌ ZŁE: "Jest to bardzo ważne dla wydajności."
+✅ DOBRE: "Regularne czyszczenie filtra zwiększa wydajność zmywarki o 15%."
+
+# KOŃCOWE WYMAGANIA
+
+1. **Zacznij od answer-first**: Pierwszy akapit = bezpośrednia odpowiedź
+2. **Zastosuj strukturę modułową**: H2/H3, Q&A, listy, tabele
+3. **Pisz snippable**: Każde zdanie samodzielne i konkretne
+4. **Wzmocnij semantycznie**: Synonimy, kontekst, mierzalne dane
+5. **Unikaj ogólników**: Zawsze konkret zamiast "innowacyjny", "najlepszy"
+6. **Prosty język techniczny**: Wyjaśniaj terminy, ale nie infantylizuj
+
+ROZPOCZNIJ PISANIE ARTYKUŁU TERAZ. Pamiętaj: TYLKO HTML, żadnych komentarzy ani wprowadzeń."""
+
+DEFAULT_BRIEF_PROMPT_TEMPLATE = """Jesteś światowej klasy strategiem treści SEO specjalizującym się w optymalizacji pod AI search (GEO/AIO).
+
+Twoim zadaniem jest stworzenie szczegółowego briefu dla artykułu zoptymalizowanego pod systemy AI (Google SGE, Bing Copilot, ChatGPT).
+
+# KROK 1: ANALIZA TEMATU I INTENCJI
+Przeanalizuj temat: "{{TOPIC}}"
+
+Określ:
+1. **Złożoność**: SZEROKI (wymaga wyczerpującego pillar page) czy WĄSKI (odpowiedź na konkretne pytanie)
+2. **Intencja wyszukiwania**: Informacyjna, transakcyjna, nawigacyjna, komercyjna
+3. **Typ odpowiedzi AI**: Czy to będzie quick answer, step-by-step guide, comparison, czy comprehensive overview
+
+# KROK 2: BRIEF W FORMACIE JSON
+
+**KRYTYCZNA ZASADA**: Klucz `temat_artykulu` MUSI być DOKŁADNIE taki sam jak {{TOPIC}}
 
 Struktura JSON:
+
 {
   "temat_artykulu": "{{TOPIC}}",
-  "analiza_tematu": "Krótki opis, czy temat jest szeroki czy wąski i dlaczego.",
-  "grupa_docelowa": "Krótki opis, dla kogo jest artykuł.",
+  
+  "analiza_tematu": "Krótki opis (2-3 zdania): czy SZEROKI czy WĄSKI, jaka intencja, dlaczego AI będzie parsować tę treść",
+  
+  "grupa_docelowa": "Dla kogo: poziom wiedzy, potrzeby, kontekst użycia",
+  
   "zagadnienia_kluczowe": [
-      // Dla tematów SZEROKICH: 5-7 nagłówków (H2).
-      // Dla tematów WĄSKICH: 2-4 nagłówki (H2).
-      // WAŻNE: Jedno z zagadnień MUSI odpowiadać na pytanie "Dlaczego..." lub "Jak to działa krok po kroku...", aby stworzyć sekcję 'reasoning'.
+    // TEMAT SZEROKI: 5-7 zagadnień (H2)
+    // TEMAT WĄSKI: 2-4 zagadnienia (H2)
+    // Formułuj jako pytania: "Jak działa X?", "Czym różni się A od B?"
+    // JEDNO zagadnienie MUSI być typu "Dlaczego..." lub "Jak krok po kroku..."
+    "Jak działa mechanizm X?",
+    "Dlaczego Y jest kluczowe dla Z?",
+    "Czym różni się A od B?" 
   ],
+  
   "slowa_kluczowe": [
-      // Array 5-10 głównych słów kluczowych.
+    // 5-10 głównych słów/fraz kluczowych
+    // Priorytet dla long-tail keywords (3-5 słów)
   ],
+  
   "dodatkowe_slowa_semantyczne": [
-      // Array 5-10 fraz i kolokacji semantycznie wspierających główny temat.
+    // 5-10 fraz semantycznie wspierających główny temat
+    // Kolokacje, pytania użytkowników, powiązane koncepcje
+    // Przykład dla "zmywarka": "zużycie wody", "poziom hałasu", "pojemność załadunku"
   ],
+  
   "relacje_leksykalne": {
-      "synonimy": [
-          // Array 3-5 synonimów dla głównego słowa kluczowego.
-      ],
-      "hiperonimy": [
-          // Array 2-3 terminów ogólniejszych, nadrzędnych (np. dla "rower" -> "pojazd", "sprzęt sportowy").
-      ],
-      "hiponimy": [
-          // Array 2-3 terminów bardziej szczegółowych, podrzędnych (np. dla "rower" -> "rower górski", "rower szosowy").
-      ]
+    "synonimy": [
+      // 3-5 synonimów głównego słowa kluczowego
+      // AI użyje ich zamiennie dla wzmocnienia kontekstu
+    ],
+    "hiperonimy": [
+      // 2-3 terminów ogólniejszych, nadrzędnych
+      // Przykład: dla "rower elektryczny" -> "rower", "pojazd"
+    ],
+    "hiponimy": [
+      // 2-3 terminów bardziej szczegółowych, podrzędnych
+      // Przykład: dla "zmywarka" -> "zmywarka do zabudowy", "zmywarka wolnostojąca"
+    ]
   }
 }
 
-Wygeneruj wyłącznie kompletny i poprawny brief w formacie JSON dla tematu: "{{TOPIC}}"
-"""
+**WYGENERUJ WYŁĄCZNIE KOMPLETNY I POPRAWNY JSON** dla tematu: "{{TOPIC}}"
+
+Nie dodawaj komentarzy poza strukturą JSON."""
 
 def call_gpt5_nano(api_key, prompt):
+    """Wywołanie modelu GPT-5-nano"""
     client = openai.OpenAI(api_key=api_key)
     response = client.chat.completions.create(
         model="gpt-5-nano",
@@ -269,23 +396,33 @@ def call_gpt5_nano(api_key, prompt):
     )
     return response.choices[0].message.content
 
-def generate_article_two_parts(api_key, title, prompt):
-    part1_prompt = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\n{prompt}\n\nNapisz PIERWSZĄ POŁOWĘ tego artykułu. Zatrzymaj się w naturalnym miejscu w połowie tekstu."
-    part1_text = call_gpt5_nano(api_key, part1_prompt)
-
-    part2_prompt = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\nOto pierwsza połowa artykułu. Dokończ go, pisząc drugą połowę. Kontynuuj płynnie od miejsca, w którym przerwano. Nie dodawaj wstępów typu 'Oto kontynuacja' ani nie powtarzaj tytułu.\n\nOryginalne wytyczne do artykułu:\n{prompt}\n\n---DOTYCHCZAS NAPISANA TREŚĆ---\n{part1_text}"
-    part2_text = call_gpt5_nano(api_key, part2_prompt)
-
-    return title, part1_text.strip() + "\n\n" + part2_text.strip()
+def generate_article_single_pass(api_key, title, prompt):
+    """
+    Generowanie artykułu w JEDNYM wywołaniu API.
+    Zwraca: (title, article_html)
+    """
+    try:
+        full_prompt = f"{SYSTEM_PROMPT_BASE}\n\n---ZADANIE---\n{prompt}\n\nROZPOCZNIJ PISANIE ARTYKUŁU. TYLKO HTML, BEZ KOMENTARZY."
+        
+        article_html = call_gpt5_nano(api_key, full_prompt)
+        
+        # Dodatkowe czyszczenie na wypadek, gdyby AI dodało markdown
+        article_html = article_html.strip()
+        article_html = article_html.replace("```html", "").replace("```", "")
+        
+        return title, article_html.strip()
+    except Exception as e:
+        return title, f"<p><strong>BŁĄD KRYTYCZNY podczas generowania artykułu:</strong> {str(e)}</p>"
 
 def generate_article_dispatcher(model, api_key, title, prompt):
+    """Dispatcher - obecnie obsługuje tylko gpt-5-nano"""
     try:
         if model == "gpt-5-nano":
-            return generate_article_two_parts(api_key, title, prompt)
+            return generate_article_single_pass(api_key, title, prompt)
         else:
-            return title, f"**BŁĄD: Nieobsługiwany model '{model}'**"
+            return title, f"<p><strong>BŁĄD: Nieobsługiwany model '{model}'</strong></p>"
     except Exception as e:
-        return title, f"**BŁĄD KRYTYCZNY podczas generowania artykułu:** {str(e)}"
+        return title, f"<p><strong>BŁĄD KRYTYCZNY:</strong> {str(e)}</p>"
 
 def generate_image_prompt_gpt5(api_key, article_title, style_prompt):
     prompt = f"""Jesteś art directorem. Twoim zadaniem jest stworzenie krótkiego promptu do generatora obrazów AI, łącząc temat artykułu z podanym stylem przewodnim.
@@ -341,15 +478,26 @@ def generate_brief_and_image(openai_api_key, google_api_key, topic, aspect_ratio
 
 def generate_meta_tags_gpt5(api_key, article_title, article_content, keywords):
     try:
-        prompt = f"""Jesteś ekspertem SEO copywritingu. Przeanalizuj poniższy artykuł i stwórz do niego idealne meta tagi. Temat główny: {article_title}. Słowa kluczowe: {", ".join(keywords)}. Treść artykułu (fragment): {article_content[:2500]}. Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" (max 60 znaków) i "meta_description" (max 155 znaków)."""
+        prompt = f"""Jesteś ekspertem SEO copywritingu. Przeanalizuj poniższy artykuł i stwórz do niego idealne meta tagi zoptymalizowane pod AI search.
+
+Temat główny: {article_title}
+Słowa kluczowe: {", ".join(keywords)}
+Treść artykułu (fragment): {article_content[:2500]}
+
+ZASADY:
+- Meta title: max 60 znaków, zawiera główne słowo kluczowe, przyciągający
+- Meta description: max 155 znaków, answer-first (bezpośrednia odpowiedź), call-to-action
+
+Zwróć odpowiedź WYŁĄCZNIE w formacie JSON z dwoma kluczami: "meta_title" i "meta_description"."""
+        
         json_string = call_gpt5_nano(api_key, prompt).strip().replace("```json", "").replace("```", "")
         return json.loads(json_string)
     except Exception as e:
-        return {"meta_title": article_title, "meta_description": ""}
+        return {"meta_title": article_title[:60], "meta_description": f"Kompleksowy przewodnik: {article_title}"[:155]}
 
 # --- INTERFEJS UŻYTKOWNIKA (STREAMLIT) ---
 
-st.set_page_config(layout="wide", page_title="PBN Manager")
+st.set_page_config(layout="wide", page_title="PBN Manager - AI Search Optimized")
 
 if 'master_prompt' not in st.session_state: st.session_state.master_prompt = DEFAULT_MASTER_PROMPT_TEMPLATE
 if 'brief_prompt' not in st.session_state: st.session_state.brief_prompt = DEFAULT_BRIEF_PROMPT_TEMPLATE
@@ -357,8 +505,8 @@ if 'menu_choice' not in st.session_state: st.session_state.menu_choice = "Dashbo
 if 'generated_articles' not in st.session_state: st.session_state.generated_articles = []
 if 'generated_briefs' not in st.session_state: st.session_state.generated_briefs = []
 
-st.title("🚀 PBN Manager")
-st.caption("Centralne zarządzanie i generowanie treści dla Twojej sieci blogów.")
+st.title("🚀 PBN Manager - AI Search Optimized")
+st.caption("Centralne zarządzanie i generowanie treści zoptymalizowanych pod AI search (GEO/AIO)")
 
 conn = get_db_connection()
 
@@ -370,9 +518,9 @@ default_index = 0
 if 'go_to_page' in st.session_state:
     try:
         default_index = menu_options.index(st.session_state.go_to_page)
-        del st.session_state.go_to_page # Usuwamy flagę, aby nie wpływała na kolejne interakcje
+        del st.session_state.go_to_page
     except ValueError:
-        default_index = 0 # Na wypadek, gdyby nazwa strony była błędna
+        default_index = 0
 
 st.sidebar.radio("Wybierz sekcję:", menu_options, key='menu_choice', index=default_index)
 
@@ -641,7 +789,7 @@ Przykład:
                 st.rerun()
 
 elif st.session_state.menu_choice == "Generator Briefów":
-    st.header("📝 Generator Briefów")
+    st.header("📝 Generator Briefów (Zoptymalizowany pod AI Search)")
 
     initial_topics = ""
     if 'topics_from_strategist' in st.session_state and st.session_state.topics_from_strategist:
@@ -688,15 +836,19 @@ elif st.session_state.menu_choice == "Generator Briefów":
                         if item['image_error']: st.warning(item['image_error'])
 
 elif st.session_state.menu_choice == "Generowanie Treści":
-    st.header("🤖 Generator Treści AI")
-    if not st.session_state.generated_briefs: st.warning("Brak briefów. Przejdź do 'Generator Briefów'.")
+    st.header("🤖 Generator Treści AI (Jednoetapowy)")
+    st.info("✨ Artykuły generowane w JEDNYM wywołaniu API, zoptymalizowane pod AI search (GEO/AIO)")
+    
+    if not st.session_state.generated_briefs: 
+        st.warning("Brak briefów. Przejdź do 'Generator Briefów'.")
     else:
         personas = {name: desc for _, name, desc in db_execute(conn, "SELECT id, name, description FROM personas", fetch="all")}
-        if not personas: st.error("Brak Person. Przejdź do 'Zarządzanie Personami'.")
+        if not personas: 
+            st.error("Brak Person. Przejdź do 'Zarządzanie Personami'.")
         else:
             c1, c2 = st.columns(2)
             persona_name = c1.selectbox("Wybierz Personę autora", options=personas.keys())
-            c2.info("Model: **gpt-5-nano**")
+            c2.info("Model: **gpt-5-nano** (Single-pass generation)")
 
             valid_briefs = [b for b in st.session_state.generated_briefs if 'error' not in b['brief']]
             if valid_briefs:
@@ -730,15 +882,26 @@ elif st.session_state.menu_choice == "Generowanie Treści":
                                 tasks.append({'title': brief['temat_artykulu'], 'prompt': prompt, 'keywords': brief.get('slowa_kluczowe', []), 'image': valid_briefs[i]['image']})
 
                             st.session_state.generated_articles = []
-                            with st.spinner(f"Generowanie {len(tasks)} artykułów..."):
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            with st.spinner(f"Generowanie {len(tasks)} artykułów (jednoetapowo)..."):
                                 with ThreadPoolExecutor(max_workers=5) as executor:
                                     futures = {executor.submit(generate_article_dispatcher, "gpt-5-nano", openai_api_key, t['title'], t['prompt']): t for t in tasks}
+                                    completed = 0
                                     for future in as_completed(futures):
                                         task = futures[future]
                                         title, content = future.result()
                                         meta = generate_meta_tags_gpt5(openai_api_key, title, content, task['keywords'])
                                         st.session_state.generated_articles.append({"title": title, "content": content, "image": task['image'], **meta})
-                            st.success("Generowanie zakończone!")
+                                        
+                                        completed += 1
+                                        progress_bar.progress(completed / len(tasks))
+                                        status_text.text(f"Wygenerowano {completed}/{len(tasks)} artykułów")
+                            
+                            progress_bar.empty()
+                            status_text.empty()
+                            st.success("✅ Generowanie zakończone!")
                             st.session_state.go_to_page = "Harmonogram Publikacji"
                             st.rerun()
 
@@ -848,16 +1011,31 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
                             st.rerun()
 
 elif st.session_state.menu_choice == "⚙️ Edytor Promptów":
-    st.header("⚙️ Edytor Promptów")
-    st.info("Dostosuj szablony promptów używane do generowania briefów i artykułów. Zmiany są aktywne w bieżącej sesji.")
+    st.header("⚙️ Edytor Promptów (AI Search Optimized)")
+    st.info("Dostosuj szablony promptów zoptymalizowane pod AI search. Zmiany są aktywne w bieżącej sesji.")
+    
     tab1, tab2 = st.tabs(["Master Prompt (Artykuły)", "Prompt do Briefu"])
+    
     with tab1:
-        st.subheader("Master Prompt do generowania artykułów")
+        st.subheader("Master Prompt do generowania artykułów (Jednoetapowy)")
         st.markdown("**Zmienne:** `{{PERSONA_DESCRIPTION}}`, `{{TEMAT_ARTYKULU}}`, `{{ANALIZA_TEMATU}}`, `{{GRUPA_DOCELOWA}}`, `{{ZAGADNIENIA_KLUCZOWE}}`, `{{SLOWA_KLUCZOWE}}`, `{{DODATKOWE_SLOWA_SEMANTYCZNE}}`, `{{HIPERONIMY}}`, `{{HIPONIMY}}`, `{{SYNOMINY}}`")
+        
+        with st.expander("📖 Kluczowe zasady optymalizacji pod AI search"):
+            st.markdown("""
+            - **Answer-First**: Pierwszy akapit zawiera bezpośrednią odpowiedź
+            - **Modułowa struktura**: H2/H3 jako granice content slices dla AI parsing
+            - **Q&A format**: Pytania jako nagłówki, krótkie odpowiedzi (snippable)
+            - **Semantyczna jasność**: Konkret zamiast ogólnika, mierzalne dane
+            - **Relacje leksykalne**: Synonimy, hiperonimy, hiponimy dla wzmocnienia kontekstu
+            - **Proste formatowanie**: Unikaj ozdobników, em dash, długich zdań
+            - **E-E-A-T signals**: Doświadczenie, ekspertyza, autorytatywność, zaufanie
+            """)
+        
         st.session_state.master_prompt = st.text_area("Edytuj Master Prompt", value=st.session_state.master_prompt, height=600, label_visibility="collapsed")
         if st.button("Przywróć domyślny Master Prompt"):
             st.session_state.master_prompt = DEFAULT_MASTER_PROMPT_TEMPLATE
             st.rerun()
+    
     with tab2:
         st.subheader("Prompt do generowania briefu")
         st.markdown("**Zmienne:** `{{TOPIC}}`")
