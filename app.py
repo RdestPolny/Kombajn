@@ -730,7 +730,7 @@ elif st.session_state.menu_choice == "🗺️ Strateg Tematyczny":
                 with st.spinner("AI analizuje strukturę tematyczną i szuka luk..."):
                     CLUSTER_ANALYSIS_PROMPT = f"""Jesteś ekspertem SEO i strategiem treści specjalizującym się w optymalizacji pod AI search (GEO/AIO).
 
-Twoim zadaniem jest analiza listy tytułów artykułów z bloga i zaproponowanie nowych tematów zoptymalizowanych pod systemy AI (Google SGE, Bing Copilot, ChatGPT).
+Twoim zadaniem jest analiza listy tytułów artykułów z bloga i zaproponowanie UNIKALNYCH, NIE-DUPLIKUJĄCYCH tematów zoptymalizowanych pod systemy AI.
 
 # KROK 1: ANALIZA I GRUPOWANIE
 Przeanalizuj poniższe tytuły i pogrupuj je w logiczne klastry tematyczne:
@@ -738,55 +738,84 @@ Przeanalizuj poniższe tytuły i pogrupuj je w logiczne klastry tematyczne:
 
 Nazwa klastra = ogólny, nadrzędny temat (np. "Marketing w mediach społecznościowych", "Pozycjonowanie lokalne", "Zdrowa dieta")
 
-# KROK 2: IDENTYFIKACJA LUK
-Dla każdego klastra określ:
-- Jakich fundamentalnych tematów brakuje?
-- Które pytania użytkowników pozostają bez odpowiedzi?
-- Które aspekty tematu są słabo pokryte?
+# KROK 2: IDENTYFIKACJA PRAWDZIWYCH LUK (KRYTYCZNE!)
+Dla każdego klastra określ **co NAPRAWDĘ brakuje**, a nie tylko parafrazy istniejących tematów:
 
-# KROK 3: PROPOZYCJE TEMATÓW (KRYTYCZNE ZASADY)
-Proponowane tematy MUSZĄ być zoptymalizowane pod AI search:
+❌ BŁĄD - Proponowanie parafraz:
+- Istniejący: "Jak zbudować skuteczną rutynę anti-aging"
+- ❌ ZŁA propozycja: "Jak stworzyć rutynę anti-aging krok po kroku"
+- ✅ DOBRA propozycja: "Jak modyfikować rutynę anti-aging podczas podróży służbowych?"
 
-1. **Format pytań**: Preferuj tytuły w formie pytania ("Jak...", "Dlaczego...", "Co...", "Czym różni się...")
-   ✅ DOBRE: "Jak wybrać zmywarkę do małej kuchni? Przewodnik 2025"
-   ❌ ZŁE: "Zmywarki do małych kuchni"
+Szukaj luk w:
+- **Specyficzne scenariusze użycia** (podróże, praca zdalna, małe mieszkanie, budżet do 100 zł)
+- **Niszowe przypadki brzegowe** (łączenie produktów, nietypowe typy skóry, choroby współistniejące)
+- **Zaawansowane porównania** (marka A vs B, składnik X w różnych stężeniach, procedura Y vs Z)
+- **Problematyczne sytuacje** (efekty uboczne, co zrobić gdy coś nie działa, jak naprawić błędy)
+- **Temporalne aspekty** (zmiany sezonowe, progresja w czasie, długoterminowe vs krótkoterminowe efekty)
+- **Aspekty ekonomiczne** (budżetowe alternatywy, stosunek ceny do jakości, gdzie zaoszczędzić)
 
-2. **Konkretność**: Unikaj ogólników, dodawaj kontekst i liczby
-   ✅ DOBRE: "7 najczęstszych błędów w link buildingu (i jak ich unikać)"
-   ❌ ZŁE: "Błędy w link buildingu"
+# KROK 3: GENEROWANIE PROPOZYCJI - ZASADA ZERO-DUPLIKACJI
 
-3. **Intencja wyszukiwania**: Dopasuj do tego, czego użytkownicy szukają
-   - Informacyjna: "Jak działa...", "Co to jest...", "Dlaczego..."
-   - Transakcyjna: "Najlepsze...", "Top 5...", "Porównanie..."
-   - Problem-solving: "Jak naprawić...", "Co zrobić gdy...", "Rozwiązanie..."
+**ABSOLUTNIE ZABRONIONE:**
+- ❌ Parafrazowanie istniejących tytułów
+- ❌ Zmiana jednego słowa w istniejącym tytule
+- ❌ Dodanie "kompletny przewodnik" do istniejącego tematu
+- ❌ Zmiana kolejności słów w istniejącym tytule
 
-4. **Answer-first friendly**: Tytuł powinien sugerować konkretną odpowiedź
-   ✅ DOBRE: "Ile kosztuje pozycjonowanie strony? Cennik i czynniki wpływające na cenę"
-   ❌ ZŁE: "Koszty pozycjonowania"
+**PRZED dodaniem tematu do propozycji, SPRAWDŹ:**
+1. Czy odpowiada na INNE pytanie niż istniejące artykuły?
+2. Czy zawiera NOWY kąt/perspektywę?
+3. Czy dotyczy SPECYFICZNEGO scenariusza/przypadku?
+4. Czy NIE jest parafrazą żadnego z istniejących tytułów?
 
-5. **Snippable topics**: Tematy, które łatwo będą parsowane przez AI
-   - Zawierają kluczowe słowa
-   - Obiecują konkretną, mierzalną wartość
-   - Są samodzielne i zrozumiałe
+**TYLKO jeśli odpowiedź na wszystkie 4 pytania to TAK - dodaj temat do propozycji.**
+
+# KROK 4: OPTYMALIZACJA POD AI SEARCH
+
+Każdy proponowany temat MUSI:
+
+1. **Być ultra-specyficzny i niszowy**
+   ✅ "Jak stosować retinol w rutynie anti-aging jeśli masz rozaceę? Bezpieczny protokół"
+   ✅ "Witamina C w serach: 10% vs 15% vs 20% - która dawka dla jakiego typu skóry?"
+   ✅ "Jak budować rutynę anti-aging z budżetem 200 zł miesięcznie? Priorytetyzacja zakupów"
+   ❌ "Jak stosować retinol w pielęgnacji?" (zbyt ogólne)
+
+2. **Odpowiadać na konkretne, zaawansowane pytanie**
+   ✅ "Co zrobić gdy niacynamid powoduje zaczerwienienia? Troubleshooting + alternatywy"
+   ✅ "Czy można łączyć kwas hialuronowy z retinolem w jednej rutynie? Bezpieczna kolejność"
+   ❌ "Jak stosować niacynamid?" (zbyt podstawowe)
+
+3. **Zawierać mierzalne parametry lub konkretne liczby**
+   ✅ "Ile czasu trzeba czekać między aplikacją witaminy C a kremu SPF? Nauka vs praktyka"
+   ✅ "Jak długo czekać na efekty peptydów miedziowych? Timeline 30/60/90 dni"
+   
+4. **Dotyczyć case study lub problematycznych sytuacji**
+   ✅ "Purging po retinolu: jak odróżnić od prawdziwej alergii? Mapa objawów"
+   ✅ "Które składniki aktywne nie powinny się znaleźć w jednej rutynie? Macierz kompatybilności"
 
 # WYMAGANY FORMAT JSON
-
-Zwróć WYŁĄCZNIE kompletny JSON (bez komentarzy, bez markdown):
 
 [
   {{
     "nazwa_klastra": "Nazwa nadrzędnego tematu",
     "istniejace_artykuly": ["Tytuł 1", "Tytuł 2"],
-    "luki_w_tresci": "Krótki opis (1-2 zdania), czego brakuje w tym klastrze",
+    "luki_w_tresci": "Opis KONKRETNYCH luk (nie ogólniki). Co użytkownicy chcą wiedzieć, a nie znajdą w istniejących artykułach?",
     "proponowane_nowe_tematy": [
-      "Jak [konkretne pytanie] - Przewodnik krok po kroku",
-      "Czym różni się X od Y? Porównanie + tabela",
-      "7 sprawdzonych sposobów na [cel] w 2025",
-      "Co zrobić gdy [problem]? Rozwiązanie + przykłady",
-      "Dlaczego [zjawisko] - Wyjaśnienie dla początkujących"
+      "Ultra-specyficzny temat 1 z jasnym kątem i kontekstem",
+      "Niszowy case study 2 z mierzalnymi parametrami",
+      "Zaawansowane porównanie 3 z konkretnymi liczbami",
+      "Problematyczna sytuacja 4 z troubleshooting",
+      "Scenariusz brzegowy 5 z praktycznymi ograniczeniami"
     ]
   }}
 ]
+
+**PRZED ZWRÓCENIEM JSON - WYKONAJ SELF-CHECK:**
+Dla każdego proponowanego tematu upewnij się, że:
+- [ ] NIE jest parafrazą istniejącego tytułu
+- [ ] Zawiera UNIKALNY kąt/perspektywę
+- [ ] Jest ultra-specyficzny (nie ogólny)
+- [ ] Odpowiada na pytanie, którego istniejące artykuły NIE pokrywają
 
 WYGENERUJ TERAZ KOMPLETNĄ ANALIZĘ W FORMACIE JSON."""
                     try:
@@ -807,7 +836,11 @@ WYGENERUJ TERAZ KOMPLETNĄ ANALIZĘ W FORMACIE JSON."""
                 for title in cluster['istniejace_artykuly']:
                     st.write(f"- {title}")
                 
-                st.markdown("##### 💡 Proponowane nowe tematy do wypełnienia luki:")
+                if 'luki_w_tresci' in cluster:
+                    st.markdown("##### 🔍 Zidentyfikowane luki w treści:")
+                    st.info(cluster['luki_w_tresci'])
+                
+                st.markdown("##### 💡 Proponowane nowe tematy (zoptymalizowane pod AI search):")
                 for new_topic in cluster['proponowane_nowe_tematy']:
                     st.write(f"- **{new_topic}**")
                     all_new_topics.append(new_topic)
