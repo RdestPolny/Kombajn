@@ -90,8 +90,28 @@ class WordPressAPI:
             response = requests.get(f"{self.base_url}/users/me", auth=self.auth, timeout=10)
             response.raise_for_status()
             return True, "Połączenie udane!"
-        except requests.exceptions.HTTPError as e: return False, f"Błąd HTTP ({e.response.status_code}): {e.response.text}"
-        except requests.exceptions.RequestException as e: return False, f"Błąd połączenia: {e}"
+        except requests.exceptions.HTTPError as e:
+            error_details = ""
+            try:
+                error_json = e.response.json()
+                error_details = f"\nKod błędu: {error_json.get('code', 'N/A')}\nWiadomość: {error_json.get('message', 'N/A')}"
+            except:
+                error_details = f"\nOdpowiedź: {e.response.text[:200]}"
+            
+            if e.response.status_code == 401:
+                return False, f"""❌ Błąd autoryzacji (401){error_details}
+
+Możliwe przyczyny:
+1. Hasło aplikacji jest nieprawidłowe
+2. Hasła aplikacji nie są włączone w WordPress (sprawdź: Użytkownicy → Profil)
+3. Login jest nieprawidłowy
+4. Hasło ma nieprawidłowy format (spróbuj usunąć spacje)
+
+💡 Wskazówka: Wygeneruj NOWE hasło aplikacji w WordPress i skopiuj je dokładnie."""
+            
+            return False, f"Błąd HTTP ({e.response.status_code}){error_details}"
+        except requests.exceptions.RequestException as e: 
+            return False, f"Błąd połączenia: {e}"
 
     def get_stats(self):
         try:
@@ -595,18 +615,36 @@ with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
 if st.session_state.menu_choice == "Zarządzanie Stronami":
     st.header("🔗 Zarządzanie Stronami i Konfiguracją")
     st.subheader("Dodaj nową stronę")
+    with st.expander("ℹ️ Jak wygenerować hasło aplikacji WordPress?", expanded=False):
+        st.markdown("""
+        1. Zaloguj się do WordPress jako administrator
+        2. Przejdź do: **Użytkownicy → Profil**
+        3. Przewiń na dół do sekcji **"Hasła aplikacji"** (Application Passwords)
+        4. Wprowadź nazwę (np. "PBN Manager")
+        5. Kliknij **"Dodaj nowe hasło aplikacji"**
+        6. Skopiuj wygenerowane hasło **dokładnie** (może zawierać spacje - to OK)
+        
+        ⚠️ **Jeśli nie widzisz sekcji "Hasła aplikacji":**
+        - WordPress musi być w wersji 5.6+
+        - Twoja strona musi używać HTTPS
+        - Wtyczki bezpieczeństwa mogą blokować tę funkcję
+        """)
+    
     with st.form("add_site_form", clear_on_submit=True):
         name = st.text_input("Przyjazna nazwa strony")
         url = st.text_input("URL strony", placeholder="https://twojastrona.pl")
         username = st.text_input("Login WordPress")
-        app_password = st.text_input("Hasło Aplikacji", type="password")
+        app_password = st.text_input("Hasło Aplikacji", type="password", help="Skopiuj hasło aplikacji ze spacjami lub bez - oba formaty działają")
         if st.form_submit_button("Testuj połączenie i Zapisz", type="primary"):
             if all([name, url, username, app_password]):
+                # Normalizacja hasła - usuń wszystkie białe znaki (spacje, tabulatory, newlines)
+                app_password_clean = ''.join(app_password.split())
+                
                 with st.spinner("Testowanie połączenia..."):
-                    api = WordPressAPI(url, username, app_password)
+                    api = WordPressAPI(url, username, app_password_clean)
                     success, message = api.test_connection()
                 if success:
-                    encrypted_password = encrypt_data(app_password)
+                    encrypted_password = encrypt_data(app_password_clean)
                     try:
                         db_execute(conn, "INSERT INTO sites (name, url, username, app_password, image_style_prompt) VALUES (?, ?, ?, ?, ?)", (name, url, username, encrypted_password, ""))
                         st.success(f"Strona '{name}' dodana!")
@@ -638,20 +676,24 @@ if st.session_state.menu_choice == "Zarządzanie Stronami":
                 if decryption_status == "⚠️ BŁĄD HASŁA":
                     with st.expander("🔧 Napraw hasło (ponowne wprowadzenie)", expanded=True):
                         st.warning("Hasło nie może być odszyfrowane. Wprowadź je ponownie.")
+                        st.info("💡 Wygeneruj NOWE hasło aplikacji w WordPress: Użytkownicy → Profil → Hasła aplikacji")
                         with st.form(f"fix_password_{site_id}"):
-                            new_password = st.text_input("Nowe hasło aplikacji", type="password", key=f"new_pass_{site_id}")
-                            if st.form_submit_button("Zaktualizuj hasło"):
+                            new_password = st.text_input("Nowe hasło aplikacji", type="password", key=f"new_pass_{site_id}", help="Hasło ze spacjami lub bez - oba formaty działają")
+                            if st.form_submit_button("Testuj i Zaktualizuj hasło"):
                                 if new_password:
+                                    # Normalizacja hasła - usuń wszystkie białe znaki
+                                    new_password_clean = ''.join(new_password.split())
+                                    
                                     # Test połączenia przed zapisaniem
-                                    test_api = WordPressAPI(url, username, new_password)
+                                    test_api = WordPressAPI(url, username, new_password_clean)
                                     success, message = test_api.test_connection()
                                     if success:
-                                        encrypted_new = encrypt_data(new_password)
+                                        encrypted_new = encrypt_data(new_password_clean)
                                         db_execute(conn, "UPDATE sites SET app_password = ? WHERE id = ?", (encrypted_new, site_id))
-                                        st.success(f"Hasło dla '{name}' zaktualizowane!")
+                                        st.success(f"✅ Hasło dla '{name}' zaktualizowane!")
                                         st.rerun()
                                     else:
-                                        st.error(f"Połączenie nieudane: {message}")
+                                        st.error(message)
                                 else:
                                     st.error("Wprowadź hasło.")
 
