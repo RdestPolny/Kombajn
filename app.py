@@ -18,7 +18,9 @@ from PIL import Image
 
 # --- KONFIGURACJA I INICJALIZACJA ---
 
-SECRET_KEY_SEED = "twoj-bardzo-dlugi-i-tajny-klucz-do-szyfrowania-konfiguracji"
+# Klucz szyfrowania - możesz go ustawić w st.secrets jako ENCRYPTION_KEY
+# Jeśli nie jest ustawiony, używa domyślnego (niezalecane w produkcji)
+SECRET_KEY_SEED = st.secrets.get("ENCRYPTION_KEY", "twoj-bardzo-dlugi-i-tajny-klucz-do-szyfrowania-konfiguracji")
 KEY = base64.urlsafe_b64encode(SECRET_KEY_SEED.encode().ljust(32)[:32])
 FERNET = Fernet(KEY)
 
@@ -26,7 +28,12 @@ def encrypt_data(data: str) -> bytes:
     return FERNET.encrypt(data.encode())
 
 def decrypt_data(encrypted_data: bytes) -> str:
-    return FERNET.decrypt(encrypted_data).decode()
+    """Deszyfruje dane. W przypadku błędu zwraca None."""
+    try:
+        return FERNET.decrypt(encrypted_data).decode()
+    except Exception as e:
+        st.error(f"⚠️ Nie można odszyfrować hasła. Możliwe przyczyny: zmieniony klucz szyfrowania lub uszkodzone dane.")
+        return None
 
 # --- ZARZĄDZANIE BAZĄ DANYCH W PAMIĘCI ---
 
@@ -528,6 +535,18 @@ st.sidebar.header("Konfiguracja API")
 openai_api_key = st.secrets.get("OPENAI_API_KEY", "") or st.sidebar.text_input("Klucz OpenAI API", type="password")
 google_api_key = st.secrets.get("GOOGLE_API_KEY", "") or st.sidebar.text_input("Klucz Google AI API", type="password")
 
+with st.sidebar.expander("ℹ️ Klucz szyfrowania"):
+    st.info("""
+    Hasła są szyfrowane kluczem. Domyślny klucz: zahardkodowany w kodzie.
+    
+    **Zalecane**: Ustaw własny klucz w `st.secrets`:
+    ```
+    ENCRYPTION_KEY = "twoj-unikalny-bardzo-tajny-klucz-min-32-znaki"
+    ```
+    
+    ⚠️ **UWAGA**: Zmiana klucza uniemożliwi odszyfrowanie starych haseł!
+    """)
+
 with st.sidebar.expander("Zarządzanie Konfiguracją (Plik JSON)"):
     uploaded_file = st.file_uploader("Załaduj plik konfiguracyjny", type="json", key="config_uploader")
     if uploaded_file is not None:
@@ -597,16 +616,44 @@ if st.session_state.menu_choice == "Zarządzanie Stronami":
             else: st.error("Wszystkie pola są wymagane.")
 
     st.subheader("Lista załadowanych stron")
-    sites = db_execute(conn, "SELECT id, name, url, username, image_style_prompt FROM sites", fetch="all")
+    sites = db_execute(conn, "SELECT id, name, url, username, image_style_prompt, app_password FROM sites", fetch="all")
     if not sites: st.info("Brak załadowanych stron.")
     else:
-        for site_id, name, url, username, style_prompt in sites:
+        for site_id, name, url, username, style_prompt, encrypted_pass in sites:
+            # Sprawdź status deszyfrowania
+            decryption_status = "✅ OK"
+            decrypted_test = decrypt_data(encrypted_pass)
+            if decrypted_test is None:
+                decryption_status = "⚠️ BŁĄD HASŁA"
+            
             with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
+                c1, c2, c3 = st.columns([2, 1, 1])
                 c1.markdown(f"**{name}** (`{url}`)")
-                if c2.button("🗑️ Usuń", key=f"delete_{site_id}", use_container_width=True):
+                c2.metric("Status hasła", decryption_status)
+                if c3.button("🗑️ Usuń", key=f"delete_{site_id}", use_container_width=True):
                     db_execute(conn, "DELETE FROM sites WHERE id = ?", (site_id,))
                     st.rerun()
+
+                # Jeśli błąd deszyfrowania, pokaż opcję naprawy
+                if decryption_status == "⚠️ BŁĄD HASŁA":
+                    with st.expander("🔧 Napraw hasło (ponowne wprowadzenie)", expanded=True):
+                        st.warning("Hasło nie może być odszyfrowane. Wprowadź je ponownie.")
+                        with st.form(f"fix_password_{site_id}"):
+                            new_password = st.text_input("Nowe hasło aplikacji", type="password", key=f"new_pass_{site_id}")
+                            if st.form_submit_button("Zaktualizuj hasło"):
+                                if new_password:
+                                    # Test połączenia przed zapisaniem
+                                    test_api = WordPressAPI(url, username, new_password)
+                                    success, message = test_api.test_connection()
+                                    if success:
+                                        encrypted_new = encrypt_data(new_password)
+                                        db_execute(conn, "UPDATE sites SET app_password = ? WHERE id = ?", (encrypted_new, site_id))
+                                        st.success(f"Hasło dla '{name}' zaktualizowane!")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Połączenie nieudane: {message}")
+                                else:
+                                    st.error("Wprowadź hasło.")
 
                 with st.expander("Edytuj styl wizualny obrazków dla tej strony"):
                     new_style = st.text_area("Prompt stylu", value=style_prompt or "photorealistic, sharp focus, soft natural lighting", key=f"style_{site_id}", height=100, help="Opisz styl obrazków, np. 'minimalistyczny, flat design, pastelowe kolory' lub 'dramatyczne oświetlenie, styl kinowy, wysoki kontrast'.")
@@ -631,9 +678,17 @@ elif st.session_state.menu_choice == "Dashboard":
             start_date = datetime.now() - timedelta(days=days)
             all_posts_dates = []
             def fetch_site_posts(site_data):
-                _, _, url, username, enc_pass = site_data
-                api = WordPressAPI(url, username, decrypt_data(enc_pass))
-                return [p['date'] for p in api.get_all_posts_since(start_date)]
+                _, site_name, url, username, enc_pass = site_data
+                try:
+                    decrypted_pass = decrypt_data(enc_pass)
+                    if decrypted_pass is None:
+                        st.warning(f"⚠️ Pomiń stronę '{site_name}' - nie można odszyfrować hasła.")
+                        return []
+                    api = WordPressAPI(url, username, decrypted_pass)
+                    return [p['date'] for p in api.get_all_posts_since(start_date)]
+                except Exception as e:
+                    st.warning(f"⚠️ Błąd pobierania danych z '{site_name}': {e}")
+                    return []
 
             with ThreadPoolExecutor() as executor:
                 futures = {executor.submit(fetch_site_posts, site): site for site in sites_tuple}
@@ -662,9 +717,16 @@ elif st.session_state.menu_choice == "Dashboard":
         def get_summary_stats(sites_tuple):
             all_data = []
             for _, name, url, username, encrypted_pass in sites_tuple:
-                api = WordPressAPI(url, username, decrypt_data(encrypted_pass))
-                stats = api.get_stats()
-                all_data.append({"Nazwa": name, "URL": url, "Liczba wpisów": stats['total_posts'], "Ostatni wpis": stats['last_post_date']})
+                decrypted_pass = decrypt_data(encrypted_pass)
+                if decrypted_pass is None:
+                    all_data.append({"Nazwa": name, "URL": url, "Liczba wpisów": "⚠️ Błąd hasła", "Ostatni wpis": "N/A"})
+                    continue
+                try:
+                    api = WordPressAPI(url, username, decrypted_pass)
+                    stats = api.get_stats()
+                    all_data.append({"Nazwa": name, "URL": url, "Liczba wpisów": stats['total_posts'], "Ostatni wpis": stats['last_post_date']})
+                except Exception as e:
+                    all_data.append({"Nazwa": name, "URL": url, "Liczba wpisów": f"Błąd: {e}", "Ostatni wpis": "N/A"})
             return all_data
 
         if st.button("Odśwież statystyki"): st.cache_data.clear()
@@ -710,7 +772,12 @@ elif st.session_state.menu_choice == "🗺️ Strateg Tematyczny":
 
         if st.button("Analizuj i Zaplanuj Klastry", type="primary"):
             site_info = sites_options[site_name]
-            api = WordPressAPI(site_info[2], site_info[3], decrypt_data(site_info[4]))
+            decrypted_pass = decrypt_data(site_info[4])
+            if decrypted_pass is None:
+                st.error("❌ Nie można odszyfrować hasła dla wybranej strony. Sprawdź konfigurację lub ponownie dodaj stronę.")
+                st.stop()
+            
+            api = WordPressAPI(site_info[2], site_info[3], decrypted_pass)
 
             with st.spinner(f"Pobieranie tytułów artykułów ze strony '{site_name}'..."):
                 all_posts = []
@@ -1000,8 +1067,14 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                 author_id = c2.number_input("ID Autora (opcjonalnie)", min_value=1, step=1)
 
                 cat_site = st.selectbox("Pobierz kategorie ze strony:", options=sites_options.keys())
-                api = WordPressAPI(sites_options[cat_site][2], sites_options[cat_site][3], decrypt_data(sites_options[cat_site][4]))
-                categories = api.get_categories()
+                cat_site_info = sites_options[cat_site]
+                decrypted_cat_pass = decrypt_data(cat_site_info[4])
+                if decrypted_cat_pass is None:
+                    st.error(f"❌ Nie można odszyfrować hasła dla '{cat_site}'. Pomiń lub napraw konfigurację.")
+                    categories = {}
+                else:
+                    api = WordPressAPI(cat_site_info[2], cat_site_info[3], decrypted_cat_pass)
+                    categories = api.get_categories()
                 selected_cats = st.multiselect("Wybierz kategorie", options=categories.keys())
                 tags_str = st.text_input("Tagi (oddzielone przecinkami)")
 
@@ -1022,7 +1095,12 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                                 article = st.session_state.generated_articles[index]
                                 for site_name in selected_sites:
                                     site_info = sites_options[site_name]
-                                    api_pub = WordPressAPI(site_info[2], site_info[3], decrypt_data(site_info[4]))
+                                    decrypted_pub_pass = decrypt_data(site_info[4])
+                                    if decrypted_pub_pass is None:
+                                        st.error(f"❌ [{site_name}]: Nie można odszyfrować hasła. Pomijam tę stronę.")
+                                        continue
+                                    
+                                    api_pub = WordPressAPI(site_info[2], site_info[3], decrypted_pub_pass)
                                     
                                     site_cats = api_pub.get_categories()
                                     cat_ids = [site_cats[name] for name in selected_cats if name in site_cats]
@@ -1052,7 +1130,13 @@ elif st.session_state.menu_choice == "Zarządzanie Treścią":
     if sites_options:
         site_name = st.selectbox("Wybierz stronę", options=sites_options.keys())
         site_info = sites_options[site_name]
-        api = WordPressAPI(site_info[2], site_info[3], decrypt_data(site_info[4]))
+        decrypted_content_pass = decrypt_data(site_info[4])
+        
+        if decrypted_content_pass is None:
+            st.error("❌ Nie można odszyfrować hasła dla wybranej strony. Sprawdź konfigurację lub ponownie dodaj stronę.")
+            st.stop()
+        
+        api = WordPressAPI(site_info[2], site_info[3], decrypted_content_pass)
 
         @st.cache_data(ttl=300)
         def get_site_content(_site_name):
