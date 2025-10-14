@@ -1221,7 +1221,7 @@ elif st.session_state.menu_choice == "⚙️ Edytor Promptów":
         
         with st.expander("📖 Kluczowe zasady optymalizacji pod AI search"):
             st.markdown("""
-            - **Answer-First**: Pierwszy akapit zawiera bezpośrednią odpowiedź
+            - **Answer-First**: Pierwszy akapit zawiera bezpośrednią odpowiedź ale nie poprzedza go żadnego techniczne sformułowanie informujące o formacie np oto najważniejsza odpowiedź czy oto krótka odpowiedź
             - **Modułowa struktura**: H2/H3 jako granice content slices dla AI parsing
             - **Q&A format**: Pytania jako nagłówki, krótkie odpowiedzi (snippable)
             - **Semantyczna jasność**: Konkret zamiast ogólnika, mierzalne dane
