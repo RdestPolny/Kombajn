@@ -1108,15 +1108,25 @@ elif st.session_state.menu_choice == "Harmonogram Publikacji":
                 selected_sites = c1.multiselect("Wybierz strony docelowe", options=sites_options.keys())
                 author_id = c2.number_input("ID Autora (opcjonalnie)", min_value=1, step=1)
 
-                cat_site = st.selectbox("Pobierz kategorie ze strony:", options=sites_options.keys())
+                # Kategorie - pobierz dla wybranej strony
+                cat_site = st.selectbox("Pobierz kategorie ze strony:", options=sites_options.keys(), key="cat_site_selector")
+                
+                # Pobierz kategorie dynamicznie dla wybranej strony
                 cat_site_info = sites_options[cat_site]
                 decrypted_cat_pass = decrypt_data(cat_site_info[4])
+                
                 if decrypted_cat_pass is None:
                     st.error(f"❌ Nie można odszyfrować hasła dla '{cat_site}'. Pomiń lub napraw konfigurację.")
                     categories = {}
                 else:
-                    api = WordPressAPI(cat_site_info[2], cat_site_info[3], decrypted_cat_pass)
-                    categories = api.get_categories()
+                    # Cache per strona - klucz zawiera nazwę strony
+                    @st.cache_data(ttl=300)
+                    def get_categories_for_site(site_name, site_url, site_user, site_pass):
+                        api = WordPressAPI(site_url, site_user, site_pass)
+                        return api.get_categories()
+                    
+                    categories = get_categories_for_site(cat_site, cat_site_info[2], cat_site_info[3], decrypted_cat_pass)
+                
                 selected_cats = st.multiselect("Wybierz kategorie", options=categories.keys())
                 tags_str = st.text_input("Tagi (oddzielone przecinkami)")
 
@@ -1221,7 +1231,7 @@ elif st.session_state.menu_choice == "⚙️ Edytor Promptów":
         
         with st.expander("📖 Kluczowe zasady optymalizacji pod AI search"):
             st.markdown("""
-            - **Answer-First**: Pierwszy akapit zawiera bezpośrednią odpowiedź ale nie poprzedza go żadnego techniczne sformułowanie informujące o formacie np oto najważniejsza odpowiedź czy oto krótka odpowiedź
+            - **Answer-First**: Pierwszy akapit zawiera bezpośrednią odpowiedź
             - **Modułowa struktura**: H2/H3 jako granice content slices dla AI parsing
             - **Q&A format**: Pytania jako nagłówki, krótkie odpowiedzi (snippable)
             - **Semantyczna jasność**: Konkret zamiast ogólnika, mierzalne dane
